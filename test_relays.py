@@ -93,14 +93,30 @@ class TestVlessParser(unittest.TestCase):
         path = "/vless"
         name = "کاربر تستی"
         encoded_name = urllib.parse.quote(name)
-        encoded_path = urllib.parse.quote(path)
+        encoded_path = urllib.parse.quote(path, safe="")
 
-        url = f"vless://{test_uuid}@{domain}:{port}?type=ws&security=tls&sni={domain}&path={encoded_path}#{encoded_name}"
-        self.assertTrue(url.startswith(f"vless://{test_uuid}@{domain}:443"))
-        self.assertIn("security=tls", url)
-        self.assertIn(f"sni={domain}", url)
-        self.assertIn(f"path={encoded_path}", url)
-        self.assertIn(f"#{encoded_name}", url)
+        # Test WebSocket format
+        url_ws = f"vless://{test_uuid}@{domain}:{port}?type=ws&security=tls&sni={domain}&host={domain}&path={encoded_path}&alpn=http%2F1.1&fp=chrome#{encoded_name}"
+        self.assertTrue(url_ws.startswith(f"vless://{test_uuid}@{domain}:443"))
+        self.assertIn("type=ws", url_ws)
+        self.assertIn("security=tls", url_ws)
+        self.assertIn(f"sni={domain}", url_ws)
+        self.assertIn(f"host={domain}", url_ws)
+        self.assertIn(f"path={encoded_path}", url_ws)
+        self.assertIn("alpn=http%2F1.1", url_ws)
+        self.assertIn("fp=chrome", url_ws)
+        self.assertIn(f"#{encoded_name}", url_ws)
+
+        # Test XHTTP format
+        url_xhttp = f"vless://{test_uuid}@{domain}:{port}?type=xhttp&security=tls&sni={domain}&host={domain}&path={encoded_path}&mode=auto&fp=chrome#{encoded_name}"
+        self.assertTrue(url_xhttp.startswith(f"vless://{test_uuid}@{domain}:443"))
+        self.assertIn("type=xhttp", url_xhttp)
+        self.assertIn("security=tls", url_xhttp)
+        self.assertIn(f"sni={domain}", url_xhttp)
+        self.assertIn(f"host={domain}", url_xhttp)
+        self.assertIn(f"path={encoded_path}", url_xhttp)
+        self.assertIn("mode=auto", url_xhttp)
+        self.assertIn("fp=chrome", url_xhttp)
 
 
 if __name__ == "__main__":
