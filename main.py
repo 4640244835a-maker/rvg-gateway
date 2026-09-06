@@ -269,21 +269,24 @@ _configured_ws_path = config.WS_PATH if config.WS_PATH.startswith("/") else f"/{
 @app.websocket(_configured_ws_path)
 @app.websocket("/vless")
 @app.websocket("/vless/")
+@app.websocket("/ws")
+@app.websocket("/ws/")
+@app.websocket("/{full_path:path}")
 async def vless_websocket_endpoint(
     websocket: WebSocket,
+    full_path: str = "",
     db: Session = Depends(database.get_db)
 ):
     """
-    هندلر اصلی VLESS over WebSocket
-    ترافیک ورودی را تحلیل، اعتبارسنجی و به مقصد نهایی رله می‌کند.
+    هندلر جامع VLESS over WebSocket
+    پشتیبانی از تمام مسیرهای دلخواه و جلوگیری از خطای ۴۰۴ در کلاینت‌های مختلف
     """
     await handle_vless_websocket(websocket, db)
 
 
-@app.get(_configured_ws_path)
-@app.get("/vless")
-@app.head(_configured_ws_path)
-@app.head("/vless")
+@app.api_route(_configured_ws_path, methods=["GET", "POST", "HEAD"])
+@app.api_route("/vless", methods=["GET", "POST", "HEAD"])
+@app.api_route("/vless/", methods=["GET", "POST", "HEAD"])
 async def vless_http_probe():
     """
     پاسخ به پروب‌های HTTP/XHTTP کلاینت‌ها و بررسی آنلاین بودن مسیر رله VLESS در Railway
