@@ -131,8 +131,8 @@ def generate_vless_url(
 
     import urllib.parse
     encoded_name = urllib.parse.quote(name)
-    # انکود کردن مسیر طبق استاندارد RFC و Xray (مانند %2Fvless)
-    encoded_path = urllib.parse.quote(raw_path, safe="")
+    # مسیر تمیز با حفظ اسلش استاندارد جهت جلوگیری از ریجکت شدن توسط Envoy ریلوِی
+    clean_path = urllib.parse.quote(raw_path, safe="/?#[]@!$&'()*+,;=")
 
     params = [
         f"type={transport.lower()}",
@@ -143,14 +143,11 @@ def generate_vless_url(
     if use_tls:
         params.append(f"sni={effective_domain}")
     params.append(f"host={effective_domain}")
-    params.append(f"path={encoded_path}")
+    params.append(f"path={clean_path}")
 
     # پارامترهای اختصاصی نوع انتقال
     if transport.lower() == "xhttp":
         params.append("mode=auto")
-    elif transport.lower() == "ws":
-        if use_tls:
-            params.append("alpn=http%2F1.1")
 
     # اثر انگشت امنیتی uTLS برای کلاینت‌های مدرن
     params.append("fp=chrome")
