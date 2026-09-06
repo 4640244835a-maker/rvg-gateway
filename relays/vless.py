@@ -5,6 +5,7 @@ RVG Gateway - VLESS over WebSocket Relay Engine
 """
 
 import asyncio
+import base64
 import logging
 import socket
 import struct
@@ -37,7 +38,7 @@ class VlessHeaderParser:
         # 1. Version (1 byte - معمولاً 0x00)
         version = raw_data[0]
         if version != 0x00:
-            logger.warning(f"Unexpected VLESS version: {version}")
+            logger.debug(f"VLESS version: {version}")
 
         # 2. Client UUID (16 bytes raw binary)
         client_uuid_bytes = raw_data[1:17]
@@ -99,29 +100,90 @@ class VlessHeaderParser:
         return client_uuid, command, target_host, target_port, initial_payload
 
 
+async def _connect_tcp_upstream(
+    target_host: str,
+    target_port: int,
+    timeout: float = 6.0
+) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """
+    برقراری اتصال سریع و بهینه‌شده به سرور مقصد با اولویت آدرس‌های IPv4
+    جهت جلوگیری از تایم‌اوت ناشی از عدم مسیریابی IPv6 در کانتینرهای کلود (مانند Railway).
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        addrinfo = await loop.getaddrinfo(
+            target_host,
+            target_port,
+            type=socket.SOCK_STREAM
+        )
+    except Exception as e:
+        raise ConnectionError(f"DNS lookup failed for {target_host}: {e}")
+
+    # اولویت‌بندی با IPv4 برای بالاترین سازگاری و کمترین Latency در سرورهای ابری
+    sorted_addrs = sorted(addrinfo, key=lambda item: 0 if item[0] == socket.AF_INET else 1)
+
+    last_err: Optional[Exception] = None
+    for family, socktype, proto, canonname, sockaddr in sorted_addrs:
+        sock = None
+        try:
+            sock = socket.socket(family, socktype, proto)
+            sock.setblocking(False)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, config.BUFFER_SIZE)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, config.BUFFER_SIZE)
+            except Exception:
+                pass
+
+            await asyncio.wait_for(loop.sock_connect(sock, sockaddr), timeout=timeout)
+            reader, writer = await asyncio.open_connection(sock=sock, limit=config.BUFFER_SIZE)
+            return reader, writer
+        except Exception as err:
+            last_err = err
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            continue
+
+    raise ConnectionError(f"Could not connect to {target_host}:{target_port}: {last_err}")
+
+
 async def handle_vless_websocket(websocket: WebSocket, db: Session):
     """
-    هندلر اصلی اتصال WebSocket در مسیر /vless
-    مراحل:
-    ۱. پذیرش اتصال وبسوکت
-    ۲. دریافت اولین پکت باینری حاوی هدر VLESS
-    ۳. اعتبارسنجی هویت و سهمیه کاربر از دیتابیس
-    ۴. برقراری سوکت TCP به سرور مقصد (Upstream) با بافر 512KB و TCP_NODELAY
-    ۵. ارسال پاسخ موفقیت VLESS (b"\x00\x00")
-    ۶. آغاز رله ترافیک دوطرفه همگام با محاسبه ترافیک مصرفی
+    هندلر اصلی اتصال WebSocket برای پروتکل VLESS
+    - پشتیبانی از 0-RTT Early Data در هدر Sec-WebSocket-Protocol و پارامتر ed
+    - اعتبارسنجی کاربر، سهمیه و وضعیت فعال بودن در دیتابیس
+    - تفکیک هوشمند پکت‌های TCP (دستور 0x01) و UDP (دستور 0x02 برای DNS/QUIC)
+    - پاسخ فوری هدر VLESS (b"\x00\x00") جهت پاس شدن تست پینگ و جلوگیری از Timeout در v2rayNG/NekoBox
     """
-    await websocket.accept()
-    upstream_reader: Optional[asyncio.StreamReader] = None
-    upstream_writer: Optional[asyncio.StreamWriter] = None
+    # بررسی و دریافت احتمالی Early Data از هدرهای WebSocket (استاندارد Xray/v2rayNG برای کاهش تأخیر)
+    sec_ws_proto = websocket.headers.get("sec-websocket-protocol", "")
+    early_data: Optional[bytes] = None
+
+    if sec_ws_proto:
+        try:
+            padded_proto = sec_ws_proto + "=" * ((4 - len(sec_ws_proto) % 4) % 4)
+            early_data = base64.urlsafe_b64decode(padded_proto)
+            await websocket.accept(subprotocol=sec_ws_proto)
+        except Exception:
+            await websocket.accept()
+    else:
+        await websocket.accept()
 
     try:
-        # دریافت پکت اول شامل هدر VLESS
-        first_chunk = await websocket.receive_bytes()
+        if early_data and len(early_data) >= 24:
+            first_chunk = early_data
+        else:
+            first_chunk = await asyncio.wait_for(websocket.receive_bytes(), timeout=8.0)
+
         if not first_chunk:
             await websocket.close(code=1003, reason="Empty initial packet")
             return
 
-        # تجزیه مشخصات درخواست
+        # تجزیه مشخصات پکت اول VLESS
         try:
             client_uuid, command, target_host, target_port, initial_payload = VlessHeaderParser.parse(first_chunk)
         except Exception as parse_err:
@@ -129,7 +191,7 @@ async def handle_vless_websocket(websocket: WebSocket, db: Session):
             await websocket.close(code=1008, reason="Malformed VLESS packet")
             return
 
-        # اعتبارسنجی کاربر و کنترل سهمیه
+        # اعتبارسنجی کاربر و کنترل حجم/تاریخ
         user = database.get_link_by_uuid(db, client_uuid)
         if not user:
             logger.warning(f"Unauthorized VLESS connection attempt with UUID: {client_uuid}")
@@ -148,46 +210,33 @@ async def handle_vless_websocket(websocket: WebSocket, db: Session):
 
         logger.info(f"VLESS connection accepted for [{user.name}] -> Target: {target_host}:{target_port} (CMD={command})")
 
-        # برقراری اتصال TCP به سرور مقصد
+        # هندلینگ دستور 0x02 (UDP): ضروری برای کوئری‌های DNS و جلوگیری از تایم‌اوت کلاینت
+        if command == 0x02:
+            await _handle_vless_udp(websocket, target_host, target_port, initial_payload, user.id, db)
+            return
+
+        # هندلینگ دستور 0x01 (TCP): ترافیک عادی وب و اپلیکیشن‌ها
         try:
-            upstream_reader, upstream_writer = await asyncio.wait_for(
-                asyncio.open_connection(
-                    host=target_host,
-                    port=target_port,
-                    limit=config.BUFFER_SIZE
-                ),
-                timeout=10.0
+            upstream_reader, upstream_writer = await _connect_tcp_upstream(
+                target_host=target_host,
+                target_port=target_port,
+                timeout=6.0
             )
         except Exception as conn_err:
             logger.error(f"Failed to connect to upstream {target_host}:{target_port} -> {conn_err}")
             await websocket.close(code=1011, reason=f"Upstream unreachable: {target_host}")
             return
 
-        # اعمال بهینه‌سازی‌های شبکه روی سوکت خام سیستم عامل
-        sock = upstream_writer.get_extra_info("socket")
-        if sock:
-            try:
-                # 1. غیرفعال کردن الگوریتم Nagle جهت به حداقل رساندن Latency در بسته‌های کوچک
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                # 2. فعال‌سازی Keep-Alive سوکت جهت شناسایی و حفظ اتصالات نیمه‌باز
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                # 3. تنظیم بافرهای ورودی و خروجی روی 512KB برای پهنای باند بالا
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, config.BUFFER_SIZE)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, config.BUFFER_SIZE)
-            except Exception as sock_opt_err:
-                logger.debug(f"Could not apply some socket options: {sock_opt_err}")
-
-        # ارسال پاسخ تایید هدر VLESS به کلاینت:
-        # Version 0x00 + Protobuf addons length 0x00
+        # ارسال بیدرنگ تاییدیه VLESS Response (Version 0x00 + Addons len 0x00)
         await websocket.send_bytes(b"\x00\x00")
 
-        # در صورت وجود دیتای اولیه (مثلا TLS Client Hello)، بلافاصله به سرور مقصد هدایت شود
+        # ارسال داده‌های اولیه در صورت وجود (مثلاً TLS Client Hello)
         if initial_payload:
             upstream_writer.write(initial_payload)
             await upstream_writer.drain()
             database.record_traffic(db, user.id, len(initial_payload))
 
-        # اجرای رله دوطرفه (Bi-Directional Relay)
+        # آغاز رله دوطرفه همگام با دیتابیس
         ws_to_upstream_task = asyncio.create_task(
             _relay_ws_to_tcp(websocket, upstream_writer, user.id, db)
         )
@@ -195,7 +244,6 @@ async def handle_vless_websocket(websocket: WebSocket, db: Session):
             _relay_tcp_to_ws(upstream_reader, websocket, user.id, db)
         )
 
-        # انتظار تا بسته شدن یکی از دو مسیر
         done, pending = await asyncio.wait(
             [ws_to_upstream_task, upstream_to_ws_task],
             return_when=asyncio.FIRST_COMPLETED
@@ -205,16 +253,127 @@ async def handle_vless_websocket(websocket: WebSocket, db: Session):
             task.cancel()
 
     except WebSocketDisconnect:
-        logger.info("Client WebSocket disconnected gracefully")
+        logger.debug("Client WebSocket disconnected")
+    except asyncio.TimeoutError:
+        logger.warning("VLESS handshake timeout while waiting for initial data")
     except Exception as e:
         logger.error(f"Error in VLESS WebSocket lifecycle: {e}", exc_info=config.DEBUG)
     finally:
-        if upstream_writer:
+        if 'upstream_writer' in locals() and upstream_writer:
             try:
                 upstream_writer.close()
                 await upstream_writer.wait_closed()
             except Exception:
                 pass
+
+
+async def _handle_vless_udp(
+    websocket: WebSocket,
+    target_host: str,
+    target_port: int,
+    initial_payload: bytes,
+    user_id: int,
+    db: Session
+):
+    """
+    هندلر اختصاصی پکت‌های UDP برای پروتکل VLESS (به ویژه کوئری‌های DNS)
+    قالب پکت‌های VLESS UDP: [2-byte big-endian length][UDP Datagram]
+    """
+    loop = asyncio.get_running_loop()
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_sock.setblocking(False)
+
+    try:
+        # حل آدرس مقصد UDP
+        addrinfo = await loop.getaddrinfo(target_host, target_port, family=socket.AF_INET, type=socket.SOCK_DGRAM)
+        dest_addr = addrinfo[0][4]
+    except Exception:
+        dest_addr = (target_host, target_port)
+
+    try:
+        # ارسال تاییدیه هدر VLESS به کلاینت
+        await websocket.send_bytes(b"\x00\x00")
+
+        # ارسال دیتای اولیه UDP در صورت وجود
+        if initial_payload:
+            offset = 0
+            while offset + 2 <= len(initial_payload):
+                pkt_len = struct.unpack("!H", initial_payload[offset:offset+2])[0]
+                offset += 2
+                if offset + pkt_len <= len(initial_payload):
+                    pkt = initial_payload[offset:offset+pkt_len]
+                    offset += pkt_len
+                    try:
+                        udp_sock.sendto(pkt, dest_addr)
+                        database.record_traffic(db, user_id, len(pkt))
+                    except Exception:
+                        pass
+                else:
+                    break
+            if offset == 0 and len(initial_payload) > 0:
+                try:
+                    udp_sock.sendto(initial_payload, dest_addr)
+                    database.record_traffic(db, user_id, len(initial_payload))
+                except Exception:
+                    pass
+
+        async def _ws_to_udp():
+            try:
+                while True:
+                    data = await websocket.receive_bytes()
+                    if not data:
+                        break
+                    offset = 0
+                    while offset + 2 <= len(data):
+                        pkt_len = struct.unpack("!H", data[offset:offset+2])[0]
+                        offset += 2
+                        if offset + pkt_len <= len(data):
+                            pkt = data[offset:offset+pkt_len]
+                            offset += pkt_len
+                            udp_sock.sendto(pkt, dest_addr)
+                            has_quota = database.record_traffic(db, user_id, len(pkt))
+                            if not has_quota:
+                                return
+                        else:
+                            break
+                    if offset == 0 and len(data) > 0:
+                        udp_sock.sendto(data, dest_addr)
+                        has_quota = database.record_traffic(db, user_id, len(data))
+                        if not has_quota:
+                            return
+            except (WebSocketDisconnect, asyncio.CancelledError):
+                pass
+            except Exception as e:
+                logger.debug(f"VLESS UDP upload error: {e}")
+
+        async def _udp_to_ws():
+            try:
+                while True:
+                    data = await loop.sock_recv(udp_sock, 65535)
+                    if not data:
+                        break
+                    # بسته‌بندی پکت به ساختار VLESS UDP با پیشوند طول ۲ بایتی
+                    framed = struct.pack("!H", len(data)) + data
+                    await websocket.send_bytes(framed)
+                    has_quota = database.record_traffic(db, user_id, len(data))
+                    if not has_quota:
+                        return
+            except (WebSocketDisconnect, asyncio.CancelledError):
+                pass
+            except Exception as e:
+                logger.debug(f"VLESS UDP download error: {e}")
+
+        ws_task = asyncio.create_task(_ws_to_udp())
+        udp_task = asyncio.create_task(_udp_to_ws())
+
+        done, pending = await asyncio.wait(
+            [ws_task, udp_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+    finally:
+        udp_sock.close()
 
 
 async def _relay_ws_to_tcp(
@@ -233,7 +392,6 @@ async def _relay_ws_to_tcp(
             writer.write(data)
             await writer.drain()
 
-            # محاسبه ترافیک و قطع اتصال در صورت اتمام حجم
             has_quota = database.record_traffic(db, user_id, chunk_len)
             if not has_quota:
                 logger.warning(f"User {user_id} exceeded quota during upload. Terminating connection.")
@@ -259,7 +417,6 @@ async def _relay_tcp_to_ws(
             chunk_len = len(data)
             await websocket.send_bytes(data)
 
-            # محاسبه ترافیک و قطع اتصال در صورت اتمام حجم
             has_quota = database.record_traffic(db, user_id, chunk_len)
             if not has_quota:
                 logger.warning(f"User {user_id} exceeded quota during download. Terminating connection.")
