@@ -58,12 +58,25 @@
 ### روش ۱: دیپلوی مستقیم روی Railway (One-Click / Git)
 1. ریپازیتوری را در حساب گیت‌هاب خود Fork یا Push کنید.
 2. وارد [Railway.app](https://railway.app) شوید و پروژه جدید از گیت‌هاب بسازید.
-3. فایل `railway.json` و `Dockerfile` به صورت خودکار شناسایی و سرویس بیلد می‌شود.
-4. متغیرهای محیطی اختیاری (اختیاری) را در بخش **Variables** ست کنید:
+3. فایل `railway.json` و `Dockerfile` به صورت خودکار شناسایی و سرویس بدون خطا بیلد می‌شود.
+4. متغیرهای محیطی اختیاری را در بخش **Variables** ست کنید:
    - `ADMIN_PASSWORD`: رمز عبور دلخواه برای ورود به پنل داشبورد.
    - `PUBLIC_DOMAIN`: آدرس دامنه تخصیص‌یافته توسط ریل‌وی (مثال: `myapp.up.railway.app`).
+5. **اتصال حافظه ماندگار (Railway Volumes)**:
+   - طبق الزامات پلتفرم ریل‌وی، دستور `VOLUME` در داکرفایل پشتیبانی نمی‌شود.
+   - برای حفظ اطلاعات دیتابیس در هنگام Deploy مجدد یا ری‌استارت، در بوم پروژه (Canvas) روی `+ New` کلیک کنید، گزینه **Volume** را انتخاب کرده و **Mount Path** را برابر `/app/data` تنظیم فرمایید.
 
-### روش ۲: اجرا با Docker
+### روش ۲: اجرا با Docker Compose (توصیه شده برای سرور و لوکال)
+یک فایل آماده `docker-compose.yml` در ریشه پروژه قرار دارد:
+```bash
+# اجرا در پس‌زمینه همراه با والیوم ذخیره‌سازی ماندگار
+docker compose up -d
+
+# مشاهده لاگ‌ها
+docker compose logs -f
+```
+
+### روش ۳: اجرا با Docker CLI
 ```bash
 # بیلد ایمیج
 docker build -t rvg-gateway .
@@ -73,14 +86,14 @@ docker run -d \
   --name rvg-gateway \
   -p 8000:8000 \
   -p 1080:1080 \
-  -v $(pwd)/data:/app/data \
+  -v rvg_data:/app/data \
   -e ADMIN_PASSWORD="your-secure-password" \
   -e PUBLIC_DOMAIN="your-vps-domain.com" \
   --restart unless-stopped \
   rvg-gateway
 ```
 
-### روش ۳: اجرای مستقیم با پایتون روی سرور لینوکس (VPS)
+### روش ۴: اجرای مستقیم با پایتون روی سرور لینوکس (VPS)
 ```bash
 # ۱. ایجاد محیط مجازی
 python3 -m venv venv
