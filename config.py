@@ -21,9 +21,30 @@ ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "admin123")
 SESSION_COOKIE_NAME: str = "rvg_session_token"
 
 # Domain & Public Addressing (used in generated client links)
-PUBLIC_DOMAIN: str = os.getenv("PUBLIC_DOMAIN", "localhost")
-PUBLIC_PORT: int = int(os.getenv("PUBLIC_PORT", str(PORT)))
-PUBLIC_TLS: bool = os.getenv("PUBLIC_TLS", "true").lower() == "true"
+# Auto-detect domain from Railway or custom environment variable
+_env_domain = (
+    os.getenv("PUBLIC_DOMAIN")
+    or os.getenv("RAILWAY_PUBLIC_DOMAIN")
+    or os.getenv("RAILWAY_STATIC_URL")
+    or ""
+).strip()
+# Remove protocol prefix if user accidentally added https://
+if _env_domain.startswith("https://"):
+    _env_domain = _env_domain[8:]
+elif _env_domain.startswith("http://"):
+    _env_domain = _env_domain[7:]
+PUBLIC_DOMAIN: str = _env_domain if _env_domain else "localhost"
+
+# Check if running in a cloud/TLS environment like Railway
+_is_cloud_tls = (
+    bool(os.getenv("RAILWAY_PUBLIC_DOMAIN"))
+    or bool(os.getenv("RAILWAY_STATIC_URL"))
+    or "railway.app" in PUBLIC_DOMAIN
+    or os.getenv("PUBLIC_TLS", "true").lower() == "true"
+)
+_default_public_port = "443" if (_is_cloud_tls and PUBLIC_DOMAIN != "localhost") else str(PORT)
+PUBLIC_PORT: int = int(os.getenv("PUBLIC_PORT", _default_public_port))
+PUBLIC_TLS: bool = _is_cloud_tls if PUBLIC_DOMAIN != "localhost" else (os.getenv("PUBLIC_TLS", "true").lower() == "true")
 WS_PATH: str = os.getenv("WS_PATH", "/vless")
 
 # Database Configuration (Persistent SQLite or Redis/PostgreSQL)
