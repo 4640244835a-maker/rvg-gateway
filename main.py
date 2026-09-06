@@ -261,10 +261,14 @@ async def dashboard_view(
 
 
 # ==========================================
-# مسیر رله VLESS مبتنی بر وب‌سوکت
+# مسیر رله VLESS مبتنی بر وب‌سوکت و پروب سلامت مسیر
 # ==========================================
 
+_configured_ws_path = config.WS_PATH if config.WS_PATH.startswith("/") else f"/{config.WS_PATH}"
+
+@app.websocket(_configured_ws_path)
 @app.websocket("/vless")
+@app.websocket("/vless/")
 async def vless_websocket_endpoint(
     websocket: WebSocket,
     db: Session = Depends(database.get_db)
@@ -274,6 +278,21 @@ async def vless_websocket_endpoint(
     ترافیک ورودی را تحلیل، اعتبارسنجی و به مقصد نهایی رله می‌کند.
     """
     await handle_vless_websocket(websocket, db)
+
+
+@app.get(_configured_ws_path)
+@app.get("/vless")
+@app.head(_configured_ws_path)
+@app.head("/vless")
+async def vless_http_probe():
+    """
+    پاسخ به پروب‌های HTTP/XHTTP کلاینت‌ها و بررسی آنلاین بودن مسیر رله VLESS در Railway
+    """
+    return Response(
+        content="RVG Gateway VLESS Relay Endpoint Active (WebSocket/XHTTP Ready)\n",
+        media_type="text/plain",
+        status_code=status.HTTP_200_OK
+    )
 
 
 # ==========================================
