@@ -26,10 +26,37 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application source code
 COPY . .
 
-# Create volume mount directory for SQLite persistence
+# ==============================================================================
+# Persistent Storage / Volumes
+# ==============================================================================
+# NOTE: The Dockerfile `VOLUME` instruction is intentionally NOT used here.
+# Railway buildpacks reject `VOLUME` with:
+#   "dockerfile invalid: docker VOLUME at Line X is not supported, use Railway Volumes"
+#
+# To attach persistent storage for the SQLite database (/app/data/rvg_gateway.db):
+#
+# 1. Via Railway Dashboard:
+#    - Open your project on Railway (https://railway.app)
+#    - Click "+ New" -> Select "Volume"
+#    - Set the Mount Path to: /app/data
+#    - Connect the Volume to this service
+#
+# 2. Via Docker Compose (docker-compose.yml):
+#    services:
+#      rvg-gateway:
+#        build: .
+#        ports:
+#          - "8000:8000"
+#          - "1080:1080"
+#        volumes:
+#          - rvg_data:/app/data
+#    volumes:
+#      rvg_data:
+#
+# 3. Via Docker CLI:
+#    docker run -d -p 8000:8000 -p 1080:1080 -v rvg_data:/app/data rvg-gateway
+# ==============================================================================
 RUN mkdir -p /app/data
-
-VOLUME ["/app/data"]
 
 # Expose HTTP/WS and SOCKS5 ports
 EXPOSE 8000 1080
