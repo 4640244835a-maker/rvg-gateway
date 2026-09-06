@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . .
 
 # Create data directory for SQLite database storage
-RUN mkdir -p /app/data
+RUN mkdir -p 
 
 # Expose HTTP/WS and SOCKS5 ports
 EXPOSE 8000 1080
