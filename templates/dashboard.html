@@ -227,17 +227,26 @@
               <td class="py-4 px-4">
                 <div class="flex items-center justify-center gap-1.5">
                   <!-- QR Code Button -->
-                  <button onclick="showQrModal('{{ link.name }}', '{{ link.vless_url }}', '{{ link.socks5_url }}')"
+                  <button onclick="showQrModal('{{ link.name }}', '{{ link.uuid }}', '{{ link.vless_url }}', '{{ link.vless_xhttp_url }}', '{{ link.socks5_url }}')"
                           class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
                           title="نمایش QR Code و کانفیگ">
                     📱
                   </button>
 
-                  <!-- Copy VLESS Link -->
-                  <button onclick="copyVlessLink('{{ link.vless_url }}')"
-                          class="p-2 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-800/40 transition"
-                          title="کپی لینک VLESS">
-                    🔗
+                  <!-- Copy VLESS WebSocket Link -->
+                  <button onclick="copyVlessDirect('{{ link.uuid }}', '{{ link.name }}', 'ws')"
+                          class="px-2 py-1.5 rounded-lg bg-emerald-950/50 hover:bg-emerald-900/70 text-emerald-400 border border-emerald-800/50 transition text-xs font-mono font-medium flex items-center gap-1"
+                          title="کپی لینک VLESS over WebSocket">
+                    <span>🔗</span>
+                    <span>WS</span>
+                  </button>
+
+                  <!-- Copy VLESS XHTTP Link -->
+                  <button onclick="copyVlessDirect('{{ link.uuid }}', '{{ link.name }}', 'xhttp')"
+                          class="px-2 py-1.5 rounded-lg bg-indigo-950/50 hover:bg-indigo-900/70 text-indigo-300 border border-indigo-800/50 transition text-xs font-mono font-medium flex items-center gap-1"
+                          title="کپی لینک VLESS over XHTTP (SplitHTTP)">
+                    <span>🚀</span>
+                    <span>XHTTP</span>
                   </button>
 
                   <!-- Toggle Active Status -->
@@ -344,27 +353,53 @@
       <!-- QR Code Canvas Container -->
       <div class="flex justify-center p-4 bg-white rounded-2xl shadow-inner my-2 w-fit mx-auto" id="qrcode-container"></div>
 
-      <!-- Live Domain & Port Customizer -->
+      <!-- Transport Mode Selector (WS vs XHTTP) -->
+      <div class="flex items-center justify-center gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
+        <button id="wsTransportBtn" type="button" onclick="setTransport('ws')"
+                class="flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1.5">
+          <span>⚡</span>
+          <span>WebSocket (ws)</span>
+        </button>
+        <button id="xhttpTransportBtn" type="button" onclick="setTransport('xhttp')"
+                class="flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5">
+          <span>🚀</span>
+          <span>XHTTP (SplitHTTP)</span>
+        </button>
+      </div>
+
+      <!-- Live Domain, Port & Path Customizer -->
       <div class="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-2">
         <div class="flex items-center justify-between text-xs text-slate-300">
           <span class="font-medium flex items-center gap-1.5">
             <span>🌐</span>
-            <span>دامنه اتصال کلاینت (Railway / Custom Domain):</span>
+            <span>تنظیمات دامنه و مسیر (Railway / Custom CDN):</span>
           </span>
           <button type="button" onclick="resetToAutoDomain()" class="text-emerald-400 hover:underline text-[11px]">
             ⚡ استفاده از دامنه فعلی
           </button>
         </div>
-        <div class="flex gap-2">
-          <input id="modalDomainInput" type="text" placeholder="aliyyyy-production.up.railway.app"
-                 class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
-                 oninput="onModalDomainInputChanged()">
-          <input id="modalPortInput" type="number" placeholder="443" value="443"
-                 class="w-20 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono text-center focus:outline-none focus:border-emerald-500"
-                 oninput="onModalDomainInputChanged()">
+        <div class="grid grid-cols-12 gap-2">
+          <div class="col-span-6">
+            <label class="block text-[10px] text-slate-400 mb-0.5">دامنه (Host / SNI):</label>
+            <input id="modalDomainInput" type="text" placeholder="example.up.railway.app"
+                   class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                   oninput="onModalInputsChanged()">
+          </div>
+          <div class="col-span-3">
+            <label class="block text-[10px] text-slate-400 mb-0.5">پورت:</label>
+            <input id="modalPortInput" type="number" placeholder="443" value="443"
+                   class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono text-center focus:outline-none focus:border-emerald-500"
+                   oninput="onModalInputsChanged()">
+          </div>
+          <div class="col-span-3">
+            <label class="block text-[10px] text-slate-400 mb-0.5">مسیر (Path):</label>
+            <input id="modalPathInput" type="text" placeholder="/vless" value="/vless"
+                   class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono text-center focus:outline-none focus:border-emerald-500"
+                   oninput="onModalInputsChanged()">
+          </div>
         </div>
-        <p class="text-[11px] text-slate-500">
-          با تغییر دامنه یا پورت در کادرهای بالا، لینک VLESS و بارکد QR فوراً و به صورت زنده به‌روزرسانی می‌شوند.
+        <p class="text-[11px] text-slate-400 leading-relaxed">
+          💡 پارامترهای <code class="text-emerald-400">host</code>، <code class="text-emerald-400">sni</code>، <code class="text-emerald-400">path</code> و <code class="text-emerald-400">alpn</code> طبق استانداردهای نسخه‌های جدید V2Ray/Xray به طور خودکار تنظیم شده‌اند تا ترافیک به راحتی از پروکسی ریورس Railway عبور کند.
         </p>
       </div>
 
@@ -372,8 +407,8 @@
       <div class="space-y-3 pt-1">
         <div>
           <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
-            <span>لینک مستقیم VLESS (WebSocket + TLS):</span>
-            <button onclick="copyFromInput('vlessInput')" class="text-emerald-400 hover:underline">کپی لینک</button>
+            <span id="vlessLabel">لینک VLESS (WebSocket + TLS):</span>
+            <button onclick="copyFromInput('vlessInput')" class="text-emerald-400 hover:underline">کپی لینک VLESS</button>
           </div>
           <input id="vlessInput" readonly class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-300">
         </div>
@@ -402,6 +437,7 @@
     // Server config values passed from backend
     const serverPublicDomain = "{{ public_domain }}";
     const serverPublicPort = "{{ public_port }}";
+    const defaultWsPath = "{{ ws_path }}";
 
     // Auto-detect browser hostname if deployed on a live domain (like Railway)
     function getDetectedDomain() {
@@ -420,6 +456,10 @@
       return serverPublicPort || '443';
     }
 
+    function getDetectedPath() {
+      return defaultWsPath || '/vless';
+    }
+
     // Initialize header badge if running on live domain
     document.addEventListener('DOMContentLoaded', () => {
       const badge = document.getElementById('headerDomainBadge');
@@ -428,35 +468,50 @@
       }
     });
 
-    function transformUrlDomain(rawUrl, targetDomain, targetPort) {
-      if (!rawUrl) return '';
-      const domain = targetDomain || getDetectedDomain();
-      const port = targetPort || getDetectedPort();
+    // Universal VLESS URL builder compliant with latest Xray / Sing-box / V2Ray client specifications
+    function constructVlessUrl(uuid, name, domain, port, transport, path) {
+      if (!uuid) return '';
       const isTLS = (port === '443' || domain.includes('railway.app') || window.location.protocol === 'https:');
       const security = isTLS ? 'tls' : 'none';
+      const cleanPath = path ? (path.startsWith('/') ? path : '/' + path) : '/vless';
+      const encodedPath = encodeURIComponent(cleanPath);
+      const encodedName = encodeURIComponent(name || 'RVG-User');
 
-      // Replace user@host:port
-      let updated = rawUrl.replace(/@([^:/?#]+):(\d+)/, `@${domain}:${port}`);
-      
-      // If VLESS url, ensure SNI and security
-      if (updated.startsWith('vless://')) {
-        updated = updated.replace(/security=[^&]*/, `security=${security}`);
+      let params = [
+        `type=${transport}`,
+        `security=${security}`
+      ];
+      if (isTLS) {
+        params.push(`sni=${domain}`);
+      }
+      params.push(`host=${domain}`);
+      params.push(`path=${encodedPath}`);
+
+      if (transport === 'xhttp') {
+        params.push('mode=auto');
+      } else if (transport === 'ws') {
         if (isTLS) {
-          if (updated.includes('&sni=')) {
-            updated = updated.replace(/&sni=[^&]*/, `&sni=${domain}`);
-          } else {
-            updated = updated.replace(/\?type=ws/, `?type=ws&sni=${domain}`);
-          }
-        } else {
-          updated = updated.replace(/&sni=[^&]*/, '');
+          params.push('alpn=http%2F1.1');
         }
       }
-      return updated;
+      params.push('fp=chrome');
+
+      return `vless://${uuid}@${domain}:${port}?${params.join('&')}#${encodedName}`;
     }
 
-    function copyVlessLink(rawVlessUrl) {
-      const transformed = transformUrlDomain(rawVlessUrl);
-      copyText(transformed, 'لینک VLESS با دامنه سرور کپی شد!');
+    function constructSocks5Url(uuid, name, domain, port) {
+      if (!uuid) return '';
+      const encodedName = encodeURIComponent(name || 'RVG-User');
+      return `socks5://${uuid}@${domain}:${port}#${encodedName}`;
+    }
+
+    function copyVlessDirect(uuid, name, transport) {
+      const domain = getDetectedDomain();
+      const port = getDetectedPort();
+      const path = getDetectedPath();
+      const url = constructVlessUrl(uuid, name, domain, port, transport, path);
+      const label = transport === 'xhttp' ? 'XHTTP' : 'WebSocket';
+      copyText(url, `لینک VLESS (${label}) کپی شد!`);
     }
 
     function showToast(msg) {
@@ -488,8 +543,27 @@
     }
 
     let qrInstance = null;
-    let currentRawVlessUrl = '';
-    let currentRawSocksUrl = '';
+    let currentModalUuid = '';
+    let currentModalName = '';
+    let currentTransport = 'ws'; // 'ws' or 'xhttp'
+
+    function setTransport(transport) {
+      currentTransport = transport;
+      const wsBtn = document.getElementById('wsTransportBtn');
+      const xhttpBtn = document.getElementById('xhttpTransportBtn');
+      const label = document.getElementById('vlessLabel');
+
+      if (transport === 'ws') {
+        wsBtn.className = 'flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-1.5';
+        xhttpBtn.className = 'flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5';
+        if (label) label.innerText = 'لینک VLESS (WebSocket + TLS):';
+      } else {
+        xhttpBtn.className = 'flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition bg-indigo-600 text-white shadow-sm flex items-center justify-center gap-1.5';
+        wsBtn.className = 'flex-1 py-1.5 px-3 rounded-lg text-xs font-medium transition text-slate-400 hover:text-white flex items-center justify-center gap-1.5';
+        if (label) label.innerText = 'لینک VLESS (XHTTP / SplitHTTP + TLS):';
+      }
+      updateModalOutputs();
+    }
 
     function renderQr(text) {
       const container = document.getElementById('qrcode-container');
@@ -507,11 +581,14 @@
     function updateModalOutputs() {
       const domainInput = document.getElementById('modalDomainInput');
       const portInput = document.getElementById('modalPortInput');
+      const pathInput = document.getElementById('modalPathInput');
+
       const domain = domainInput.value.trim() || getDetectedDomain();
       const port = portInput.value.trim() || getDetectedPort();
+      const path = pathInput.value.trim() || getDetectedPath();
 
-      const finalVless = transformUrlDomain(currentRawVlessUrl, domain, port);
-      const finalSocks = transformUrlDomain(currentRawSocksUrl, domain, port === '443' ? '1080' : port);
+      const finalVless = constructVlessUrl(currentModalUuid, currentModalName, domain, port, currentTransport, path);
+      const finalSocks = constructSocks5Url(currentModalUuid, currentModalName, domain, '1080');
 
       document.getElementById('vlessInput').value = finalVless;
       document.getElementById('socksInput').value = finalSocks;
@@ -519,26 +596,28 @@
       renderQr(finalVless);
     }
 
-    function onModalDomainInputChanged() {
+    function onModalInputsChanged() {
       updateModalOutputs();
     }
 
     function resetToAutoDomain() {
       document.getElementById('modalDomainInput').value = getDetectedDomain();
       document.getElementById('modalPortInput').value = getDetectedPort();
+      document.getElementById('modalPathInput').value = getDetectedPath();
       updateModalOutputs();
     }
 
-    function showQrModal(name, vlessUrl, socks5Url) {
+    function showQrModal(name, uuid, vlessWsUrl, vlessXhttpUrl, socks5Url) {
       document.getElementById('qrModalTitle').innerText = name;
-      currentRawVlessUrl = vlessUrl;
-      currentRawSocksUrl = socks5Url;
+      currentModalName = name;
+      currentModalUuid = uuid;
 
-      // Prefill domain inputs with current detected Railway or public domain
+      // Prefill domain & path inputs with current detected Railway or public domain
       document.getElementById('modalDomainInput').value = getDetectedDomain();
       document.getElementById('modalPortInput').value = getDetectedPort();
+      document.getElementById('modalPathInput').value = getDetectedPath();
 
-      updateModalOutputs();
+      setTransport('ws');
       document.getElementById('qrModal').classList.remove('hidden');
     }
 
