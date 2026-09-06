@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>داشبورد مدیریت RVG Gateway</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- QRCode.js Library for client-side QR generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Vazirmatn', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Vazirmatn', sans-serif; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen antialiased flex flex-col selection:bg-emerald-500 selection:text-white">
+
+  <!-- Header & Navigation -->
+  <header class="border-b border-slate-800 bg-slate-900/70 backdrop-blur-md sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-emerald-500/20">
+          ⚡
+        </div>
+        <div>
+          <span class="font-bold text-lg tracking-tight text-white flex items-center gap-2">
+            RVG Gateway
+            <span class="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-mono">v1.2.0</span>
+          </span>
+          <span class="text-xs text-slate-400 hidden sm:block">سیستم خود-میزبانی مدیریت پروکسی چندپروتکلی</span>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <!-- Language / Direction Toggle -->
+        <button id="toggleLangBtn" onclick="toggleLanguage()" class="text-xs px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 transition text-slate-300">
+          English / فارسی
+        </button>
+
+        <!-- Status Indicator -->
+        <div class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-emerald-400 text-xs">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>سرور فعال (VLESS + SOCKS5)</span>
+        </div>
+
+        <a href="/logout" class="text-xs px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 transition">
+          خروج
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full space-y-8">
+
+    <!-- KPI Stats Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Total Links -->
+      <div class="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80 shadow-sm relative overflow-hidden">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-medium mb-2">
+          <span class="stat-title-links">مجموع لینک‌ها</span>
+          <span class="text-emerald-400 text-base">🔗</span>
+        </div>
+        <div class="text-2xl font-bold text-white mono" id="stat-total-links">{{ links|length }}</div>
+        <div class="text-xs text-slate-500 mt-1">تعداد کل کلاینت‌های ثبت‌شده</div>
+      </div>
+
+      <!-- Active Links -->
+      <div class="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80 shadow-sm relative overflow-hidden">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-medium mb-2">
+          <span class="stat-title-active">لینک‌های فعال</span>
+          <span class="text-teal-400 text-base">🟢</span>
+        </div>
+        <div class="text-2xl font-bold text-emerald-400 mono">
+          {{ links|selectattr('is_active', 'equalto', true)|list|length }}
+        </div>
+        <div class="text-xs text-slate-500 mt-1">آماده دریافت ترافیک</div>
+      </div>
+
+      <!-- Total Bandwidth Used -->
+      <div class="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80 shadow-sm relative overflow-hidden">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-medium mb-2">
+          <span class="stat-title-traffic">کل ترافیک مصرفی</span>
+          <span class="text-indigo-400 text-base">📊</span>
+        </div>
+        <div class="text-2xl font-bold text-white mono" id="stat-total-traffic">{{ total_used_formatted }}</div>
+        <div class="text-xs text-slate-500 mt-1">مجموع دانلود و آپلود</div>
+      </div>
+
+      <!-- Network Buffer & Performance -->
+      <div class="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80 shadow-sm relative overflow-hidden">
+        <div class="flex items-center justify-between text-slate-400 text-xs font-medium mb-2">
+          <span class="stat-title-engine">بهینه‌سازی شبکه</span>
+          <span class="text-amber-400 text-base">🚀</span>
+        </div>
+        <div class="text-sm font-semibold text-slate-200 mt-1">
+          بافر 512KB + TCP_NODELAY
+        </div>
+        <div class="text-xs text-emerald-400 font-mono mt-1">WS: {{ ws_path }} | SOCKS: {{ socks5_port }}</div>
+      </div>
+    </div>
+
+    <!-- Actions & Filter Bar -->
+    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+      <div>
+        <h2 class="text-xl font-bold text-white" id="heading-links">مدیریت لینک‌های دسترسی (Access Links)</h2>
+        <p class="text-xs text-slate-400 mt-0.5">تولید، پایش حجم مصرفی، فعال‌سازی آنی و استخراج کانفیگ VLESS و SOCKS5</p>
+      </div>
+
+      <button onclick="openCreateModal()" class="inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition shadow-lg shadow-emerald-600/25">
+        <span>+</span>
+        <span id="btn-create-new">ساخت لینک جدید</span>
+      </button>
+    </div>
+
+    <!-- Links Table -->
+    <div class="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden shadow-xl">
+      <div class="overflow-x-auto">
+        <table class="w-full text-right text-sm">
+          <thead class="bg-slate-900/90 text-slate-400 text-xs uppercase border-b border-slate-800 font-medium">
+            <tr>
+              <th class="py-3.5 px-4">شناسه و نام لینک</th>
+              <th class="py-3.5 px-4">UUID کلاینت</th>
+              <th class="py-3.5 px-4">سهمیه / مصرف</th>
+              <th class="py-3.5 px-4">وضعیت</th>
+              <th class="py-3.5 px-4 text-center">عملیات و پیکربندی</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800/80">
+            {% for link in links %}
+            <tr class="hover:bg-slate-800/30 transition">
+              <!-- Name & ID -->
+              <td class="py-4 px-4">
+                <div class="font-medium text-white flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full {% if link.status == 'active' %}bg-emerald-400{% elif link.status == 'quota_exceeded' %}bg-amber-400{% else %}bg-slate-500{% endif %}"></span>
+                  {{ link.name }}
+                </div>
+                <div class="text-xs text-slate-500 mt-0.5">
+                  ID: #{{ link.id }}
+                </div>
+              </td>
+
+              <!-- UUID with Copy -->
+              <td class="py-4 px-4 font-mono text-xs text-slate-300">
+                <div class="flex items-center gap-2 bg-slate-950/60 px-2.5 py-1 rounded-lg border border-slate-800 w-fit">
+                  <span class="truncate max-w-[140px] sm:max-w-[200px]" title="{{ link.uuid }}">{{ link.uuid }}</span>
+                  <button onclick="copyText('{{ link.uuid }}', 'UUID کپی شد')" class="text-slate-400 hover:text-emerald-400 transition" title="کپی UUID">
+                    📋
+                  </button>
+                </div>
+              </td>
+
+              <!-- Quota & Usage Progress -->
+              <td class="py-4 px-4 min-w-[200px]">
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span class="mono text-slate-300">{{ link.used_formatted }}</span>
+                  <span class="mono text-slate-500">/ {{ link.quota_formatted }}</span>
+                </div>
+                <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
+                  <div class="h-full rounded-full transition-all duration-500 {% if link.percent_used > 90 %}bg-rose-500{% elif link.percent_used > 70 %}bg-amber-500{% else %}bg-emerald-500{% endif %}"
+                       style="width: {{ link.percent_used }}%;"></div>
+                </div>
+                <div class="text-[11px] text-slate-500 mt-1 flex justify-between">
+                  <span>{{ link.percent_used }}% مصرف شده</span>
+                  {% if link.expire_at %}
+                  <span>انقضا: {{ link.expire_at[:10] }}</span>
+                  {% endif %}
+                </div>
+              </td>
+
+              <!-- Status Badge -->
+              <td class="py-4 px-4">
+                {% if link.status == 'active' %}
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  فعال
+                </span>
+                {% elif link.status == 'quota_exceeded' %}
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                  اتمام حجم
+                </span>
+                {% elif link.status == 'expired' %}
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                  <span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
+                  منقضی شده
+                </span>
+                {% else %}
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-700/30 text-slate-400 border border-slate-700/50">
+                  <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+                  غیرفعال
+                </span>
+                {% endif %}
+              </td>
+
+              <!-- Actions -->
+              <td class="py-4 px-4">
+                <div class="flex items-center justify-center gap-1.5">
+                  <!-- QR Code Button -->
+                  <button onclick="showQrModal('{{ link.name }}', '{{ link.vless_url }}', '{{ link.socks5_url }}')"
+                          class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                          title="نمایش QR Code و کانفیگ">
+                    📱
+                  </button>
+
+                  <!-- Copy VLESS Link -->
+                  <button onclick="copyText('{{ link.vless_url }}', 'لینک VLESS کپی شد!')"
+                          class="p-2 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-800/40 transition"
+                          title="کپی لینک VLESS">
+                    🔗
+                  </button>
+
+                  <!-- Toggle Active Status -->
+                  <form action="/api/links/{{ link.id }}/toggle" method="POST" class="inline">
+                    <button type="submit"
+                            class="p-2 rounded-lg {% if link.is_active %}bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30{% else %}bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30{% endif %} transition"
+                            title="تغییر وضعیت فعال/غیرفعال">
+                      {% if link.is_active %}⏸️{% else %}▶️{% endif %}
+                    </button>
+                  </form>
+
+                  <!-- Reset Traffic -->
+                  <form action="/api/links/{{ link.id }}/reset" method="POST" class="inline" onsubmit="return confirm('آیا از صفر کردن حجم مصرفی اطمینان دارید؟');">
+                    <button type="submit" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-amber-400 transition" title="صفر کردن مصرف ترافیک">
+                      🔄
+                    </button>
+                  </form>
+
+                  <!-- Delete Link -->
+                  <form action="/api/links/{{ link.id }}/delete" method="POST" class="inline" onsubmit="return confirm('آیا از حذف این لینک اطمینان دارید؟');">
+                    <button type="submit" class="p-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition" title="حذف لینک">
+                      🗑️
+                    </button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="5" class="py-12 text-center text-slate-500">
+                هیچ لینکی یافت نشد. برای شروع دکمه «ساخت لینک جدید» را بزنید.
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- Create Link Modal -->
+  <div id="createModal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="font-bold text-lg text-white">افزودن لینک پروکسی جدید</h3>
+        <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+      </div>
+
+      <form action="/api/links" method="POST" class="space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">نام یا عنوان کلاینت</label>
+          <input type="text" name="name" required placeholder="مثال: گوشی سامسونگ - علی"
+                 class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">مقدار سهمیه</label>
+            <input type="number" name="quota_val" value="50" min="1" required
+                   class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">واحد حجم</label>
+            <select name="quota_unit" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+              <option value="GB" selected>گیگابایت (GB)</option>
+              <option value="MB">مگابایت (MB)</option>
+              <option value="TB">ترابایت (TB)</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">مدت اعتبار (اختیاری)</label>
+          <select name="expire_days" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+            <option value="0" selected>نامحدود (بدون انقضا)</option>
+            <option value="30">۳۰ روزه (۱ ماه)</option>
+            <option value="60">۶۰ روزه (۲ ماه)</option>
+            <option value="90">۹۰ روزه (۳ ماه)</option>
+            <option value="180">۱۸۰ روزه (۶ ماه)</option>
+          </select>
+        </div>
+
+        <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
+          <button type="button" onclick="closeCreateModal()" class="px-4 py-2 rounded-xl text-slate-400 hover:text-white text-sm">انصراف</button>
+          <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm px-5 py-2.5 rounded-xl transition">
+            ایجاد و دریافت کانفیگ
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- QR Code & Config Modal -->
+  <div id="qrModal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div>
+          <h3 class="font-bold text-lg text-white" id="qrModalTitle">کانفیگ اتصال</h3>
+          <p class="text-xs text-slate-400">کد QR را با نرم‌افزارهای v2rayNG, Nekoray, Shadowrocket یا Streisand اسکن کنید</p>
+        </div>
+        <button onclick="closeQrModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+      </div>
+
+      <!-- QR Code Canvas Container -->
+      <div class="flex justify-center p-4 bg-white rounded-2xl shadow-inner my-2 w-fit mx-auto" id="qrcode-container"></div>
+
+      <!-- Links & Copy Tabs -->
+      <div class="space-y-3 pt-2">
+        <div>
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+            <span>لینک مستقیم VLESS (WebSocket + TLS):</span>
+            <button onclick="copyFromInput('vlessInput')" class="text-emerald-400 hover:underline">کپی لینک</button>
+          </div>
+          <input id="vlessInput" readonly class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-300">
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
+            <span>پروکسی عمومی SOCKS5:</span>
+            <button onclick="copyFromInput('socksInput')" class="text-emerald-400 hover:underline">کپی لینک</button>
+          </div>
+          <input id="socksInput" readonly class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-300">
+        </div>
+      </div>
+
+      <div class="flex justify-end pt-3">
+        <button onclick="closeQrModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm px-4 py-2 rounded-xl">بستن</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 border border-emerald-500/50 text-emerald-400 px-4 py-2.5 rounded-xl shadow-2xl text-sm font-medium z-50 transition-all duration-300 opacity-0 pointer-events-none">
+    پیام کپی شد
+  </div>
+
+  <script>
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.classList.remove('opacity-0', 'pointer-events-none');
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'pointer-events-none');
+      }, 2500);
+    }
+
+    function copyText(text, successMsg = 'کپی شد!') {
+      navigator.clipboard.writeText(text).then(() => {
+        showToast(successMsg);
+      });
+    }
+
+    function copyFromInput(inputId) {
+      const el = document.getElementById(inputId);
+      copyText(el.value, 'لینک در کلیپ‌بورد کپی شد!');
+    }
+
+    function openCreateModal() {
+      document.getElementById('createModal').classList.remove('hidden');
+    }
+
+    function closeCreateModal() {
+      document.getElementById('createModal').classList.add('hidden');
+    }
+
+    let qrInstance = null;
+    function showQrModal(name, vlessUrl, socks5Url) {
+      document.getElementById('qrModalTitle').innerText = name;
+      document.getElementById('vlessInput').value = vlessUrl;
+      document.getElementById('socksInput').value = socks5Url;
+
+      const container = document.getElementById('qrcode-container');
+      container.innerHTML = '';
+      qrInstance = new QRCode(container, {
+        text: vlessUrl,
+        width: 220,
+        height: 220,
+        colorDark : "#0f172a",
+        colorLight : "#ffffff",
+        correctLevel : QRCode.CorrectLevel.M
+      });
+
+      document.getElementById('qrModal').classList.remove('hidden');
+    }
+
+    function closeQrModal() {
+      document.getElementById('qrModal').classList.add('hidden');
+    }
+
+    // Toggle RTL / LTR Language
+    let isFarsi = true;
+    function toggleLanguage() {
+      isFarsi = !isFarsi;
+      document.documentElement.dir = isFarsi ? 'rtl' : 'ltr';
+      document.documentElement.lang = isFarsi ? 'fa' : 'en';
+      document.getElementById('toggleLangBtn').innerText = isFarsi ? 'English / فارسی' : 'فارسی / English';
+    }
+  </script>
+</body>
+</html>
