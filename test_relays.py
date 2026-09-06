@@ -85,6 +85,23 @@ class TestVlessParser(unittest.TestCase):
         self.assertEqual(domain, "google.com")
         self.assertEqual(data, b"PING")
 
+    def test_vless_url_formatting(self):
+        import urllib.parse
+        test_uuid = "11111111-2222-3333-4444-555555555555"
+        domain = "my-app.up.railway.app"
+        port = 443
+        path = "/vless"
+        name = "کاربر تستی"
+        encoded_name = urllib.parse.quote(name)
+        encoded_path = urllib.parse.quote(path)
+
+        url = f"vless://{test_uuid}@{domain}:{port}?type=ws&security=tls&sni={domain}&path={encoded_path}#{encoded_name}"
+        self.assertTrue(url.startswith(f"vless://{test_uuid}@{domain}:443"))
+        self.assertIn("security=tls", url)
+        self.assertIn(f"sni={domain}", url)
+        self.assertIn(f"path={encoded_path}", url)
+        self.assertIn(f"#{encoded_name}", url)
+
 
 if __name__ == "__main__":
     unittest.main()
