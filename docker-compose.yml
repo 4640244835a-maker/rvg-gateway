@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  rvg-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rvg_gateway_proxy
+    restart: unless-stopped
+    ports:
+      - "8000:8000"  # FastAPI HTTP & VLESS WebSocket
+      - "1080:1080"  # SOCKS5 Multi-link proxy
+    environment:
+      - PORT=8000
+      - ADMIN_PASSWORD=admin
+      - LOG_LEVEL=info
+      # Set PUBLIC_DOMAIN to your domain or server IP
+      - PUBLIC_DOMAIN=localhost:8000
+    volumes:
+      # Persistent storage volume for SQLite database & logs
+      # Matches Railway Volume Mount Path (/app/data)
+      - rvg_data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  rvg_data:
+    name: rvg_gateway_data
