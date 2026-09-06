@@ -78,6 +78,69 @@ templates_dir = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
 
+def render_template(
+    template_name: str,
+    request: Request,
+    context: Optional[dict] = None,
+    status_code: int = 200
+) -> HTMLResponse:
+    """
+    رندر امن قالب‌های Jinja2 با سازگاری ۱۰۰٪ با نسخه‌های جدید و قدیم FastAPI/Starlette.
+    (رفع خطای Internal Server Error در Starlette 0.36+ / FastAPI 0.108+)
+    """
+    ctx = dict(context or {})
+    ctx["request"] = request
+
+    # ۱. روش استاندارد Starlette 0.36+ با آرگومان‌های نام‌دار
+    try:
+        return templates.TemplateResponse(
+            request=request,
+            name=template_name,
+            context=ctx,
+            status_code=status_code
+        )
+    except TypeError:
+        pass
+    except Exception as e:
+        logger.warning(f"TemplateResponse (named) failed: {e}")
+
+    # ۲. روش سنتی Starlette
+    try:
+        return templates.TemplateResponse(
+            template_name,
+            ctx,
+            status_code=status_code
+        )
+    except Exception as e:
+        logger.warning(f"TemplateResponse (positional) failed: {e}")
+
+    # ۳. رندر مستقیم از شیء Jinja2 به عنوان پشتیبان بدون خطا
+    template = templates.get_template(template_name)
+    content = template.render(ctx)
+    return HTMLResponse(content=content, status_code=status_code)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """ثبت لاگ کامل خطاها و جلوگیری از سقوط بدون ردگیری سرور"""
+    logger.error(f"Unhandled server exception on {request.url.path}: {exc}", exc_info=True)
+    return HTMLResponse(
+        content=f"""
+        <!DOCTYPE html>
+        <html lang="fa" dir="rtl">
+        <head><meta charset="UTF-8"><title>خطای سرور</title></head>
+        <body style="font-family:sans-serif;background:#090d16;color:#f1f5f9;padding:40px;text-align:center;">
+          <h2 style="color:#f43f5e;">⚠️ خطای غیرمنتظره در سرور</h2>
+          <p style="color:#94a3b8;font-size:14px;">خطا در آدرس: <code>{request.url.path}</code></p>
+          <pre style="background:#1e293b;padding:15px;border-radius:10px;display:inline-block;text-align:left;color:#cbd5e1;font-size:12px;max-width:90%;overflow:auto;">{str(exc)}</pre>
+          <p><a href="/login" style="color:#10b981;">بازگشت به صفحه ورود</a></p>
+        </body>
+        </html>
+        """,
+        status_code=500
+    )
+
+
 # ==========================================
 # سیستم احراز هویت داشبورد (Session Auth)
 # ==========================================
@@ -112,7 +175,7 @@ async def login_page(request: Request, error: Optional[str] = None):
     """نمایش فرم ورود به سیستم"""
     if is_authenticated(request):
         return RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
-    return templates.TemplateResponse("login.html", {"request": request, "error": error})
+    return render_template("login.html", request, {"error": error})
 
 
 @app.post("/login")
@@ -133,9 +196,10 @@ async def login_submit(
             samesite="lax"
         )
         return redirect
-    return templates.TemplateResponse(
+    return render_template(
         "login.html",
-        {"request": request, "error": "نام کاربری یا رمز عبور اشتباه است."},
+        request,
+        {"error": "نام کاربری یا رمز عبور اشتباه است."},
         status_code=status.HTTP_401_UNAUTHORIZED
     )
 
@@ -162,10 +226,10 @@ async def dashboard_view(
 
     total_used_bytes = sum(link.used_bytes for link in raw_links)
 
-    return templates.TemplateResponse(
+    return render_template(
         "dashboard.html",
+        request,
         {
-            "request": request,
             "links": links_data,
             "total_used_formatted": database.format_bytes(total_used_bytes),
             "public_domain": config.PUBLIC_DOMAIN,
