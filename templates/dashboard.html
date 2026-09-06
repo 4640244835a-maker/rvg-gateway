@@ -474,7 +474,6 @@
       const isTLS = (port === '443' || domain.includes('railway.app') || window.location.protocol === 'https:');
       const security = isTLS ? 'tls' : 'none';
       const cleanPath = path ? (path.startsWith('/') ? path : '/' + path) : '/vless';
-      const encodedPath = encodeURIComponent(cleanPath);
       const encodedName = encodeURIComponent(name || 'RVG-User');
 
       let params = [
@@ -485,14 +484,10 @@
         params.push(`sni=${domain}`);
       }
       params.push(`host=${domain}`);
-      params.push(`path=${encodedPath}`);
+      params.push(`path=${cleanPath}`);
 
       if (transport === 'xhttp') {
         params.push('mode=auto');
-      } else if (transport === 'ws') {
-        if (isTLS) {
-          params.push('alpn=http%2F1.1');
-        }
       }
       params.push('fp=chrome');
 
