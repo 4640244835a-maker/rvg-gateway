@@ -217,12 +217,30 @@ async def dashboard_view(
     request: Request,
     db: Session = Depends(database.get_db)
 ):
-    """صفحه داشبورد اصلی مدیریت لینک‌ها و ترافیک"""
+    """صفحه داشبورد اصلی مدیریت لینک‌ها و ترافیک با تشخیص پویای دامنه سرور"""
     if not is_authenticated(request):
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
+    # تشخیص هوشمند دامنه عمومی سرور از روی هدرهای ورودی ریل‌وی یا پروکسی معکوس
+    raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    client_domain = raw_host.split(":")[0].strip() if raw_host else ""
+
+    detected_domain = config.PUBLIC_DOMAIN
+    detected_port = config.PUBLIC_PORT
+    detected_tls = config.PUBLIC_TLS
+
+    if client_domain and client_domain not in ("localhost", "127.0.0.1", "0.0.0.0"):
+        detected_domain = client_domain
+        proto = request.headers.get("x-forwarded-proto", "https")
+        if proto == "https" or "railway.app" in client_domain:
+            detected_port = 443
+            detected_tls = True
+
     raw_links = database.get_all_links(db)
-    links_data = [link.to_dict() for link in raw_links]
+    links_data = [
+        link.to_dict(domain=detected_domain, port=detected_port, tls=detected_tls)
+        for link in raw_links
+    ]
 
     total_used_bytes = sum(link.used_bytes for link in raw_links)
 
@@ -232,8 +250,9 @@ async def dashboard_view(
         {
             "links": links_data,
             "total_used_formatted": database.format_bytes(total_used_bytes),
-            "public_domain": config.PUBLIC_DOMAIN,
-            "public_port": config.PUBLIC_PORT,
+            "public_domain": detected_domain,
+            "public_port": detected_port,
+            "public_tls": detected_tls,
             "ws_path": config.WS_PATH,
             "socks5_port": config.SOCKS5_PORT,
             "enable_socks5": config.ENABLE_SOCKS5
@@ -266,8 +285,13 @@ async def list_links(request: Request, db: Session = Depends(database.get_db)):
     """دریافت فهرست تمام لینک‌ها به فرمت JSON"""
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
+    raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    client_domain = raw_host.split(":")[0].strip() if raw_host else ""
+    active_domain = client_domain if (client_domain and client_domain not in ("localhost", "127.0.0.1", "0.0.0.0")) else config.PUBLIC_DOMAIN
+    active_port = 443 if ("railway.app" in active_domain) else config.PUBLIC_PORT
+    active_tls = True if (active_port == 443 or "railway.app" in active_domain) else config.PUBLIC_TLS
     links = database.get_all_links(db)
-    return [l.to_dict() for l in links]
+    return [l.to_dict(domain=active_domain, port=active_port, tls=active_tls) for l in links]
 
 
 @app.post("/api/links")
@@ -359,12 +383,17 @@ async def remove_link(
 
 
 @app.get("/api/config/{user_uuid}")
-async def get_config_by_uuid(user_uuid: str, db: Session = Depends(database.get_db)):
+async def get_config_by_uuid(user_uuid: str, request: Request, db: Session = Depends(database.get_db)):
     """دریافت اطلاعات و لینک کانفیگ استاندارد کلاینت با UUID"""
     link = database.get_link_by_uuid(db, user_uuid)
     if not link:
         raise HTTPException(status_code=404, detail="Config not found")
-    return link.to_dict()
+    raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    client_domain = raw_host.split(":")[0].strip() if raw_host else ""
+    active_domain = client_domain if (client_domain and client_domain not in ("localhost", "127.0.0.1", "0.0.0.0")) else config.PUBLIC_DOMAIN
+    active_port = 443 if ("railway.app" in active_domain) else config.PUBLIC_PORT
+    active_tls = True if (active_port == 443 or "railway.app" in active_domain) else config.PUBLIC_TLS
+    return link.to_dict(domain=active_domain, port=active_port, tls=active_tls)
 
 
 @app.get("/api/health")
