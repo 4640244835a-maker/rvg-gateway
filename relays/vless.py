@@ -6,11 +6,14 @@ RVG Gateway - VLESS over WebSocket Relay Engine
 
 import asyncio
 import base64
+import concurrent.futures
+import ipaddress
 import logging
 import socket
 import struct
+import time
 import uuid
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict, Any
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
@@ -19,6 +22,88 @@ import database
 
 logger = logging.getLogger("rvg.vless")
 logger.setLevel(logging.INFO)
+
+# استخر ترد اختصاصی برای کوئری‌های DNS جهت جلوگیری از مسدود شدن Event Loop اصلی
+_DNS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=64,
+    thread_name_prefix="vless_dns"
+)
+# کش موقت DNS با TTL پنج دقیقه جهت کاهش Latency و حذف کوئری‌های تکراری
+_DNS_CACHE: Dict[str, Tuple[List[Any], float]] = {}
+_DNS_CACHE_TTL = 300.0
+
+
+def _is_ip_address(host: str) -> bool:
+    """بررسی سریع این‌که آیا رشته ورودی یک آدرس آی‌پی (IPv4 یا IPv6) است یا نه"""
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        return False
+
+
+async def _resolve_host(
+    host: str,
+    port: int,
+    timeout: float = 2.5
+) -> List[Tuple[int, int, int, str, Tuple]]:
+    """
+    حل نام دامنه با اولویت IPv4، کشینگ در حافظه، استخر ترد اختصاصی و تایم‌اوت مشخص
+    برای جلوگیری از قفل شدن Event Loop و رفع قطعی خطای context deadline exceeded در سرورهای ابری.
+    """
+    clean_host = host.strip("[]")
+    if _is_ip_address(clean_host):
+        family = socket.AF_INET6 if ":" in clean_host else socket.AF_INET
+        return [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (clean_host, port))]
+
+    cache_key = f"{host}:{port}"
+    now = time.time()
+    cached = _DNS_CACHE.get(cache_key)
+    if cached and (now - cached[1]) < _DNS_CACHE_TTL:
+        return cached[0]
+
+    loop = asyncio.get_running_loop()
+
+    # ۱. تلاش سریع برای پیدا کردن آدرس IPv4 (کمترین Latency در سرورهای ابری مثل Railway)
+    try:
+        addrinfo = await asyncio.wait_for(
+            loop.run_in_executor(
+                _DNS_EXECUTOR,
+                socket.getaddrinfo,
+                host,
+                port,
+                socket.AF_INET,
+                socket.SOCK_STREAM
+            ),
+            timeout=timeout
+        )
+        if addrinfo:
+            _DNS_CACHE[cache_key] = (addrinfo, now)
+            return addrinfo
+    except Exception as e:
+        logger.debug(f"IPv4 resolution for {host}:{port} skipped/failed: {e}")
+
+    # ۲. در صورت نبود IPv4 یا خطا، امتحان کلیه خانواده‌ها (IPv4 / IPv6) با مرتب‌سازی به نفع IPv4
+    try:
+        addrinfo = await asyncio.wait_for(
+            loop.run_in_executor(
+                _DNS_EXECUTOR,
+                socket.getaddrinfo,
+                host,
+                port,
+                socket.AF_UNSPEC,
+                socket.SOCK_STREAM
+            ),
+            timeout=timeout
+        )
+        if addrinfo:
+            sorted_addrs = sorted(addrinfo, key=lambda item: 0 if item[0] == socket.AF_INET else 1)
+            _DNS_CACHE[cache_key] = (sorted_addrs, now)
+            return sorted_addrs
+    except Exception as e:
+        raise ConnectionError(f"DNS lookup failed for {host}:{port}: {e}")
+
+    raise ConnectionError(f"No address found for {host}:{port}")
 
 
 class VlessHeaderParser:
@@ -103,27 +188,19 @@ class VlessHeaderParser:
 async def _connect_tcp_upstream(
     target_host: str,
     target_port: int,
-    timeout: float = 6.0
+    dns_timeout: float = 2.5,
+    connect_timeout: float = 4.0
 ) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """
-    برقراری اتصال سریع و بهینه‌شده به سرور مقصد با اولویت آدرس‌های IPv4
-    جهت جلوگیری از تایم‌اوت ناشی از عدم مسیریابی IPv6 در کانتینرهای کلود (مانند Railway).
+    برقراری اتصال سریع و بهینه‌شده به سرور مقصد با اولویت آدرس‌های IPv4،
+    استفاده از کش موقت DNS و جلوگیری قطعی از معلق ماندن اتصال (context deadline exceeded).
     """
+    resolved_addrs = await _resolve_host(target_host, target_port, timeout=dns_timeout)
+
     loop = asyncio.get_running_loop()
-    try:
-        addrinfo = await loop.getaddrinfo(
-            target_host,
-            target_port,
-            type=socket.SOCK_STREAM
-        )
-    except Exception as e:
-        raise ConnectionError(f"DNS lookup failed for {target_host}: {e}")
-
-    # اولویت‌بندی با IPv4 برای بالاترین سازگاری و کمترین Latency در سرورهای ابری
-    sorted_addrs = sorted(addrinfo, key=lambda item: 0 if item[0] == socket.AF_INET else 1)
-
     last_err: Optional[Exception] = None
-    for family, socktype, proto, canonname, sockaddr in sorted_addrs:
+
+    for family, socktype, proto, canonname, sockaddr in resolved_addrs:
         sock = None
         try:
             sock = socket.socket(family, socktype, proto)
@@ -136,7 +213,7 @@ async def _connect_tcp_upstream(
             except Exception:
                 pass
 
-            await asyncio.wait_for(loop.sock_connect(sock, sockaddr), timeout=timeout)
+            await asyncio.wait_for(loop.sock_connect(sock, sockaddr), timeout=connect_timeout)
             reader, writer = await asyncio.open_connection(sock=sock, limit=config.BUFFER_SIZE)
             return reader, writer
         except Exception as err:
@@ -156,8 +233,8 @@ async def handle_vless_websocket(websocket: WebSocket, db: Session):
     هندلر اصلی اتصال WebSocket برای پروتکل VLESS
     - پشتیبانی از 0-RTT Early Data در هدر Sec-WebSocket-Protocol و پارامتر ed
     - اعتبارسنجی کاربر، سهمیه و وضعیت فعال بودن در دیتابیس
+    - ارسال فوری تاییدیه هدر VLESS (b"\x00\x00") جهت جلوگیری از خطای context deadline exceeded در کلاینت
     - تفکیک هوشمند پکت‌های TCP (دستور 0x01) و UDP (دستور 0x02 برای DNS/QUIC)
-    - پاسخ فوری هدر VLESS (b"\x00\x00") جهت پاس شدن تست پینگ و جلوگیری از Timeout در v2rayNG/NekoBox
     """
     # بررسی و دریافت احتمالی Early Data از هدرهای WebSocket (استاندارد Xray/v2rayNG برای کاهش تأخیر)
     sec_ws_proto = websocket.headers.get("sec-websocket-protocol", "")
@@ -210,6 +287,11 @@ async def handle_vless_websocket(websocket: WebSocket, db: Session):
 
         logger.info(f"VLESS connection accepted for [{user.name}] -> Target: {target_host}:{target_port} (CMD={command})")
 
+        # ارسال بیدرنگ تاییدیه VLESS Response (Version 0x00 + Addons len 0x00)
+        # این ارسال بلادرنگ باعث می‌شود کلاینت فوراً پاسخ هندشیک را دریافت کند و
+        # به دلیل تأخیر در DNS یا TCP اتصال با خطای context deadline exceeded قطع نشود
+        await websocket.send_bytes(b"\x00\x00")
+
         # هندلینگ دستور 0x02 (UDP): ضروری برای کوئری‌های DNS و جلوگیری از تایم‌اوت کلاینت
         if command == 0x02:
             await _handle_vless_udp(websocket, target_host, target_port, initial_payload, user.id, db)
@@ -220,15 +302,13 @@ async def handle_vless_websocket(websocket: WebSocket, db: Session):
             upstream_reader, upstream_writer = await _connect_tcp_upstream(
                 target_host=target_host,
                 target_port=target_port,
-                timeout=6.0
+                dns_timeout=2.5,
+                connect_timeout=4.0
             )
         except Exception as conn_err:
             logger.error(f"Failed to connect to upstream {target_host}:{target_port} -> {conn_err}")
             await websocket.close(code=1011, reason=f"Upstream unreachable: {target_host}")
             return
-
-        # ارسال بیدرنگ تاییدیه VLESS Response (Version 0x00 + Addons len 0x00)
-        await websocket.send_bytes(b"\x00\x00")
 
         # ارسال داده‌های اولیه در صورت وجود (مثلاً TLS Client Hello)
         if initial_payload:
@@ -283,17 +363,16 @@ async def _handle_vless_udp(
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_sock.setblocking(False)
 
-    try:
-        # حل آدرس مقصد UDP
-        addrinfo = await loop.getaddrinfo(target_host, target_port, family=socket.AF_INET, type=socket.SOCK_DGRAM)
-        dest_addr = addrinfo[0][4]
-    except Exception:
+    if _is_ip_address(target_host):
         dest_addr = (target_host, target_port)
+    else:
+        try:
+            resolved = await _resolve_host(target_host, target_port, timeout=2.0)
+            dest_addr = resolved[0][4]
+        except Exception:
+            dest_addr = (target_host, target_port)
 
     try:
-        # ارسال تاییدیه هدر VLESS به کلاینت
-        await websocket.send_bytes(b"\x00\x00")
-
         # ارسال دیتای اولیه UDP در صورت وجود
         if initial_payload:
             offset = 0
