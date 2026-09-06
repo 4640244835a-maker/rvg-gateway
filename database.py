@@ -50,8 +50,13 @@ class UserLink(Base):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     expire_at = Column(DateTime, nullable=True)
 
-    def to_dict(self) -> Dict[str, Any]:
-        """تبدیل به ساختار دیکشنری جهت ارسال به API و قالبهای HTML"""
+    def to_dict(
+        self,
+        domain: Optional[str] = None,
+        port: Optional[int] = None,
+        tls: Optional[bool] = None
+    ) -> Dict[str, Any]:
+        """تبدیل به ساختار دیکشنری جهت ارسال به API و قالبهای HTML با قابلیت تنظیم دامنه پویا"""
         now = datetime.now(timezone.utc)
         is_expired = self.expire_at is not None and (
             self.expire_at.replace(tzinfo=timezone.utc) if self.expire_at.tzinfo is None else self.expire_at
@@ -84,8 +89,8 @@ class UserLink(Base):
             "status": status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "expire_at": self.expire_at.isoformat() if self.expire_at else None,
-            "vless_url": generate_vless_url(self.uuid, self.name),
-            "socks5_url": generate_socks5_url(self.uuid, self.name),
+            "vless_url": generate_vless_url(self.uuid, self.name, domain=domain, port=port, tls=tls),
+            "socks5_url": generate_socks5_url(self.uuid, self.name, domain=domain, port=port),
         }
 
 
@@ -100,25 +105,38 @@ def format_bytes(num_bytes: int) -> str:
     return f"{num_bytes:.2f} EB"
 
 
-def generate_vless_url(user_uuid: str, name: str) -> str:
-    """تولید لینک استاندارد پیکربندی VLESS over WebSocket با TLS"""
-    domain = config.PUBLIC_DOMAIN
-    port = config.PUBLIC_PORT
-    security = "tls" if config.PUBLIC_TLS else "none"
+def generate_vless_url(
+    user_uuid: str,
+    name: str,
+    domain: Optional[str] = None,
+    port: Optional[int] = None,
+    tls: Optional[bool] = None
+) -> str:
+    """تولید لینک استاندارد پیکربندی VLESS over WebSocket با TLS و SNI اختصاصی"""
+    effective_domain = domain or config.PUBLIC_DOMAIN
+    effective_port = port if port is not None else config.PUBLIC_PORT
+    use_tls = tls if tls is not None else config.PUBLIC_TLS
+    security = "tls" if use_tls else "none"
     path = config.WS_PATH
     import urllib.parse
     encoded_name = urllib.parse.quote(name)
     encoded_path = urllib.parse.quote(path)
-    return f"vless://{user_uuid}@{domain}:{port}?type=ws&security={security}&path={encoded_path}#{encoded_name}"
+    sni_param = f"&sni={effective_domain}" if use_tls else ""
+    return f"vless://{user_uuid}@{effective_domain}:{effective_port}?type=ws&security={security}{sni_param}&path={encoded_path}#{encoded_name}"
 
 
-def generate_socks5_url(user_uuid: str, name: str) -> str:
+def generate_socks5_url(
+    user_uuid: str,
+    name: str,
+    domain: Optional[str] = None,
+    port: Optional[int] = None
+) -> str:
     """تولید لینک استاندارد SOCKS5 داخلی"""
-    domain = config.PUBLIC_DOMAIN
-    port = config.SOCKS5_PORT
+    effective_domain = domain or config.PUBLIC_DOMAIN
+    effective_port = port if port is not None else config.SOCKS5_PORT
     import urllib.parse
     encoded_name = urllib.parse.quote(name)
-    return f"socks5://{user_uuid}@{domain}:{port}#{encoded_name}"
+    return f"socks5://{user_uuid}@{effective_domain}:{effective_port}#{encoded_name}"
 
 
 def init_db():
