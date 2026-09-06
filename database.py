@@ -89,7 +89,8 @@ class UserLink(Base):
             "status": status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "expire_at": self.expire_at.isoformat() if self.expire_at else None,
-            "vless_url": generate_vless_url(self.uuid, self.name, domain=domain, port=port, tls=tls),
+            "vless_url": generate_vless_url(self.uuid, self.name, domain=domain, port=port, tls=tls, transport="ws"),
+            "vless_xhttp_url": generate_vless_url(self.uuid, self.name, domain=domain, port=port, tls=tls, transport="xhttp"),
             "socks5_url": generate_socks5_url(self.uuid, self.name, domain=domain, port=port),
         }
 
@@ -110,19 +111,52 @@ def generate_vless_url(
     name: str,
     domain: Optional[str] = None,
     port: Optional[int] = None,
-    tls: Optional[bool] = None
+    tls: Optional[bool] = None,
+    transport: str = "ws",  # "ws" or "xhttp"
+    custom_path: Optional[str] = None
 ) -> str:
-    """تولید لینک استاندارد پیکربندی VLESS over WebSocket با TLS و SNI اختصاصی"""
+    """
+    تولید لینک استاندارد پیکربندی VLESS بر اساس آخرین استانداردهای کلاینت‌های V2Ray, Xray, Sing-box, NekoBox
+    پشتیبانی کامل از ترنسپورت‌های 'ws' (WebSocket) و 'xhttp' (XHTTP / SplitHTTP).
+    تنظیم دقیق پارامترهای host, sni, path و alpn برای اتصال بدون نقص بر روی بسترهای کلود و Railway.
+    """
     effective_domain = domain or config.PUBLIC_DOMAIN
     effective_port = port if port is not None else config.PUBLIC_PORT
     use_tls = tls if tls is not None else config.PUBLIC_TLS
     security = "tls" if use_tls else "none"
-    path = config.WS_PATH
+
+    raw_path = (custom_path or config.WS_PATH).strip()
+    if not raw_path.startswith("/"):
+        raw_path = f"/{raw_path}"
+
     import urllib.parse
     encoded_name = urllib.parse.quote(name)
-    encoded_path = urllib.parse.quote(path)
-    sni_param = f"&sni={effective_domain}" if use_tls else ""
-    return f"vless://{user_uuid}@{effective_domain}:{effective_port}?type=ws&security={security}{sni_param}&path={encoded_path}#{encoded_name}"
+    # انکود کردن مسیر طبق استاندارد RFC و Xray (مانند %2Fvless)
+    encoded_path = urllib.parse.quote(raw_path, safe="")
+
+    params = [
+        f"type={transport.lower()}",
+        f"security={security}"
+    ]
+
+    # هدرهای حیاتی برای هدایت ترافیک در ریورس‌پروکسی Railway و Edge
+    if use_tls:
+        params.append(f"sni={effective_domain}")
+    params.append(f"host={effective_domain}")
+    params.append(f"path={encoded_path}")
+
+    # پارامترهای اختصاصی نوع انتقال
+    if transport.lower() == "xhttp":
+        params.append("mode=auto")
+    elif transport.lower() == "ws":
+        if use_tls:
+            params.append("alpn=http%2F1.1")
+
+    # اثر انگشت امنیتی uTLS برای کلاینت‌های مدرن
+    params.append("fp=chrome")
+
+    query_str = "&".join(params)
+    return f"vless://{user_uuid}@{effective_domain}:{effective_port}?{query_str}#{encoded_name}"
 
 
 def generate_socks5_url(
