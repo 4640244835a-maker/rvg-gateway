@@ -55,6 +55,13 @@
       </div>
 
       <div class="flex items-center gap-3">
+        <!-- Server Domain Badge -->
+        <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700/60 text-xs text-slate-300">
+          <span class="text-emerald-400">🌐</span>
+          <span class="text-slate-400">دامنه سرور:</span>
+          <span id="headerDomainBadge" class="font-mono text-emerald-400 font-medium">{{ public_domain }}:{{ public_port }}</span>
+        </div>
+
         <!-- Language / Direction Toggle -->
         <button id="toggleLangBtn" onclick="toggleLanguage()" class="text-xs px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 transition text-slate-300">
           English / فارسی
@@ -227,7 +234,7 @@
                   </button>
 
                   <!-- Copy VLESS Link -->
-                  <button onclick="copyText('{{ link.vless_url }}', 'لینک VLESS کپی شد!')"
+                  <button onclick="copyVlessLink('{{ link.vless_url }}')"
                           class="p-2 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-800/40 transition"
                           title="کپی لینک VLESS">
                     🔗
@@ -337,8 +344,32 @@
       <!-- QR Code Canvas Container -->
       <div class="flex justify-center p-4 bg-white rounded-2xl shadow-inner my-2 w-fit mx-auto" id="qrcode-container"></div>
 
+      <!-- Live Domain & Port Customizer -->
+      <div class="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-2">
+        <div class="flex items-center justify-between text-xs text-slate-300">
+          <span class="font-medium flex items-center gap-1.5">
+            <span>🌐</span>
+            <span>دامنه اتصال کلاینت (Railway / Custom Domain):</span>
+          </span>
+          <button type="button" onclick="resetToAutoDomain()" class="text-emerald-400 hover:underline text-[11px]">
+            ⚡ استفاده از دامنه فعلی
+          </button>
+        </div>
+        <div class="flex gap-2">
+          <input id="modalDomainInput" type="text" placeholder="aliyyyy-production.up.railway.app"
+                 class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                 oninput="onModalDomainInputChanged()">
+          <input id="modalPortInput" type="number" placeholder="443" value="443"
+                 class="w-20 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono text-center focus:outline-none focus:border-emerald-500"
+                 oninput="onModalDomainInputChanged()">
+        </div>
+        <p class="text-[11px] text-slate-500">
+          با تغییر دامنه یا پورت در کادرهای بالا، لینک VLESS و بارکد QR فوراً و به صورت زنده به‌روزرسانی می‌شوند.
+        </p>
+      </div>
+
       <!-- Links & Copy Tabs -->
-      <div class="space-y-3 pt-2">
+      <div class="space-y-3 pt-1">
         <div>
           <div class="flex items-center justify-between text-xs text-slate-400 mb-1">
             <span>لینک مستقیم VLESS (WebSocket + TLS):</span>
@@ -368,6 +399,66 @@
   </div>
 
   <script>
+    // Server config values passed from backend
+    const serverPublicDomain = "{{ public_domain }}";
+    const serverPublicPort = "{{ public_port }}";
+
+    // Auto-detect browser hostname if deployed on a live domain (like Railway)
+    function getDetectedDomain() {
+      const browserHost = window.location.hostname;
+      if (browserHost && browserHost !== 'localhost' && browserHost !== '127.0.0.1') {
+        return browserHost;
+      }
+      return serverPublicDomain || 'localhost';
+    }
+
+    function getDetectedPort() {
+      const domain = getDetectedDomain();
+      if (domain.includes('railway.app') || window.location.protocol === 'https:') {
+        return '443';
+      }
+      return serverPublicPort || '443';
+    }
+
+    // Initialize header badge if running on live domain
+    document.addEventListener('DOMContentLoaded', () => {
+      const badge = document.getElementById('headerDomainBadge');
+      if (badge && window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        badge.innerText = `${getDetectedDomain()}:${getDetectedPort()}`;
+      }
+    });
+
+    function transformUrlDomain(rawUrl, targetDomain, targetPort) {
+      if (!rawUrl) return '';
+      const domain = targetDomain || getDetectedDomain();
+      const port = targetPort || getDetectedPort();
+      const isTLS = (port === '443' || domain.includes('railway.app') || window.location.protocol === 'https:');
+      const security = isTLS ? 'tls' : 'none';
+
+      // Replace user@host:port
+      let updated = rawUrl.replace(/@([^:/?#]+):(\d+)/, `@${domain}:${port}`);
+      
+      // If VLESS url, ensure SNI and security
+      if (updated.startsWith('vless://')) {
+        updated = updated.replace(/security=[^&]*/, `security=${security}`);
+        if (isTLS) {
+          if (updated.includes('&sni=')) {
+            updated = updated.replace(/&sni=[^&]*/, `&sni=${domain}`);
+          } else {
+            updated = updated.replace(/\?type=ws/, `?type=ws&sni=${domain}`);
+          }
+        } else {
+          updated = updated.replace(/&sni=[^&]*/, '');
+        }
+      }
+      return updated;
+    }
+
+    function copyVlessLink(rawVlessUrl) {
+      const transformed = transformUrlDomain(rawVlessUrl);
+      copyText(transformed, 'لینک VLESS با دامنه سرور کپی شد!');
+    }
+
     function showToast(msg) {
       const toast = document.getElementById('toast');
       toast.innerText = msg;
@@ -397,22 +488,57 @@
     }
 
     let qrInstance = null;
-    function showQrModal(name, vlessUrl, socks5Url) {
-      document.getElementById('qrModalTitle').innerText = name;
-      document.getElementById('vlessInput').value = vlessUrl;
-      document.getElementById('socksInput').value = socks5Url;
+    let currentRawVlessUrl = '';
+    let currentRawSocksUrl = '';
 
+    function renderQr(text) {
       const container = document.getElementById('qrcode-container');
       container.innerHTML = '';
       qrInstance = new QRCode(container, {
-        text: vlessUrl,
+        text: text,
         width: 220,
         height: 220,
         colorDark : "#0f172a",
         colorLight : "#ffffff",
         correctLevel : QRCode.CorrectLevel.M
       });
+    }
 
+    function updateModalOutputs() {
+      const domainInput = document.getElementById('modalDomainInput');
+      const portInput = document.getElementById('modalPortInput');
+      const domain = domainInput.value.trim() || getDetectedDomain();
+      const port = portInput.value.trim() || getDetectedPort();
+
+      const finalVless = transformUrlDomain(currentRawVlessUrl, domain, port);
+      const finalSocks = transformUrlDomain(currentRawSocksUrl, domain, port === '443' ? '1080' : port);
+
+      document.getElementById('vlessInput').value = finalVless;
+      document.getElementById('socksInput').value = finalSocks;
+
+      renderQr(finalVless);
+    }
+
+    function onModalDomainInputChanged() {
+      updateModalOutputs();
+    }
+
+    function resetToAutoDomain() {
+      document.getElementById('modalDomainInput').value = getDetectedDomain();
+      document.getElementById('modalPortInput').value = getDetectedPort();
+      updateModalOutputs();
+    }
+
+    function showQrModal(name, vlessUrl, socks5Url) {
+      document.getElementById('qrModalTitle').innerText = name;
+      currentRawVlessUrl = vlessUrl;
+      currentRawSocksUrl = socks5Url;
+
+      // Prefill domain inputs with current detected Railway or public domain
+      document.getElementById('modalDomainInput').value = getDetectedDomain();
+      document.getElementById('modalPortInput').value = getDetectedPort();
+
+      updateModalOutputs();
       document.getElementById('qrModal').classList.remove('hidden');
     }
 
