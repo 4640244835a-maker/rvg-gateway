@@ -345,6 +345,10 @@ async def handle_vless_websocket(websocket: WebSocket, db: Session):
                 await upstream_writer.wait_closed()
             except Exception:
                 pass
+        try:
+            await database.flush_traffic_async()
+        except Exception:
+            pass
 
 
 async def _handle_vless_udp(
@@ -384,7 +388,7 @@ async def _handle_vless_udp(
                     offset += pkt_len
                     try:
                         udp_sock.sendto(pkt, dest_addr)
-                        database.record_traffic(db, user_id, len(pkt))
+                        database.record_traffic(user_id, len(pkt))
                     except Exception:
                         pass
                 else:
@@ -392,7 +396,7 @@ async def _handle_vless_udp(
             if offset == 0 and len(initial_payload) > 0:
                 try:
                     udp_sock.sendto(initial_payload, dest_addr)
-                    database.record_traffic(db, user_id, len(initial_payload))
+                    database.record_traffic(user_id, len(initial_payload))
                 except Exception:
                     pass
 
@@ -410,14 +414,14 @@ async def _handle_vless_udp(
                             pkt = data[offset:offset+pkt_len]
                             offset += pkt_len
                             udp_sock.sendto(pkt, dest_addr)
-                            has_quota = database.record_traffic(db, user_id, len(pkt))
+                            has_quota = database.record_traffic(user_id, len(pkt))
                             if not has_quota:
                                 return
                         else:
                             break
                     if offset == 0 and len(data) > 0:
                         udp_sock.sendto(data, dest_addr)
-                        has_quota = database.record_traffic(db, user_id, len(data))
+                        has_quota = database.record_traffic(user_id, len(data))
                         if not has_quota:
                             return
             except (WebSocketDisconnect, asyncio.CancelledError):
@@ -434,7 +438,7 @@ async def _handle_vless_udp(
                     # بسته‌بندی پکت به ساختار VLESS UDP با پیشوند طول ۲ بایتی
                     framed = struct.pack("!H", len(data)) + data
                     await websocket.send_bytes(framed)
-                    has_quota = database.record_traffic(db, user_id, len(data))
+                    has_quota = database.record_traffic(user_id, len(data))
                     if not has_quota:
                         return
             except (WebSocketDisconnect, asyncio.CancelledError):
@@ -453,15 +457,19 @@ async def _handle_vless_udp(
             t.cancel()
     finally:
         udp_sock.close()
+        try:
+            await database.flush_traffic_async()
+        except Exception:
+            pass
 
 
 async def _relay_ws_to_tcp(
     websocket: WebSocket,
     writer: asyncio.StreamWriter,
     user_id: int,
-    db: Session
+    db: Optional[Session] = None
 ):
-    """انتقال بسته‌ها از کلاینت وبسوکت به سوکت مقصد به همراه محاسبه ترافیک"""
+    """انتقال بسته‌ها از کلاینت وبسوکت به سوکت مقصد به همراه محاسبه غیرمسدودکننده ترافیک در RAM"""
     try:
         while True:
             data = await websocket.receive_bytes()
@@ -471,7 +479,7 @@ async def _relay_ws_to_tcp(
             writer.write(data)
             await writer.drain()
 
-            has_quota = database.record_traffic(db, user_id, chunk_len)
+            has_quota = database.record_traffic(user_id, chunk_len)
             if not has_quota:
                 logger.warning(f"User {user_id} exceeded quota during upload. Terminating connection.")
                 break
@@ -485,9 +493,9 @@ async def _relay_tcp_to_ws(
     reader: asyncio.StreamReader,
     websocket: WebSocket,
     user_id: int,
-    db: Session
+    db: Optional[Session] = None
 ):
-    """انتقال بسته‌ها از سوکت مقصد به کلاینت وبسوکت به همراه محاسبه ترافیک"""
+    """انتقال بسته‌ها از سوکت مقصد به کلاینت وبسوکت به همراه محاسبه غیرمسدودکننده ترافیک در RAM"""
     try:
         while True:
             data = await reader.read(config.BUFFER_SIZE)
@@ -496,7 +504,7 @@ async def _relay_tcp_to_ws(
             chunk_len = len(data)
             await websocket.send_bytes(data)
 
-            has_quota = database.record_traffic(db, user_id, chunk_len)
+            has_quota = database.record_traffic(user_id, chunk_len)
             if not has_quota:
                 logger.warning(f"User {user_id} exceeded quota during download. Terminating connection.")
                 break
@@ -504,3 +512,4 @@ async def _relay_tcp_to_ws(
         pass
     except Exception as e:
         logger.debug(f"TCP to WS relay stopped: {e}")
+
