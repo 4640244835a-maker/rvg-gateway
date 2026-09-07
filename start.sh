@@ -4,8 +4,8 @@ set -e
 echo "=================================================="
 echo " [RVG] Booting Gateway Engine with Xray-Core Supervisor"
 echo " Time: $(date -u)"
-echo " Railway Public Port: ${PORT:-8080}"
-echo " Internal FastAPI Port: ${FASTAPI_INTERNAL_PORT:-8000}"
+echo " Railway Public Port: ${PORT:-8080} (FastAPI Gateway & Web Dashboard)"
+echo " Internal Xray-core Port: ${XRAY_INTERNAL_PORT:-10080}"
 echo "=================================================="
 
 # 1. آماده‌سازی دایرکتوری‌ها و ثبت شناسه پروسه ناظر (Supervisor PID)
@@ -25,10 +25,10 @@ print('[RVG] Initial config.json built successfully.')
     echo "[RVG] Warning: Initial config generation encountered an issue, proceeding..."
 }
 
-# 3. اجرای وب‌سرور داخلی FastAPI (داشبورد، API، احراز هویت)
-FASTAPI_PORT="${FASTAPI_INTERNAL_PORT:-8000}"
-echo "[RVG] Starting FastAPI/Uvicorn on 127.0.0.1:${FASTAPI_PORT}..."
-uvicorn main:app --host 127.0.0.1 --port "${FASTAPI_PORT}" &
+# 3. اجرای درگاه اصلی FastAPI (داشبورد، API، احراز هویت و پل ارتباطی WebSocket VLESS)
+PUBLIC_PORT="${PORT:-8080}"
+echo "[RVG] Starting FastAPI Public Gateway on 0.0.0.0:${PUBLIC_PORT}..."
+uvicorn main:app --host 0.0.0.0 --port "${PUBLIC_PORT}" &
 FASTAPI_PID=$!
 echo "${FASTAPI_PID}" > /tmp/fastapi.pid
 
@@ -42,7 +42,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 start_xray() {
-    echo "[RVG] Spawning Xray-core binary on port ${PORT:-8080}..."
+    XRAY_PORT="${XRAY_INTERNAL_PORT:-10080}"
+    echo "[RVG] Spawning Xray-core binary on internal port ${XRAY_PORT}..."
     xray run -c "$CONFIG_FILE" >> /tmp/xray.log 2>&1 &
     XRAY_PID=$!
     echo "${XRAY_PID}" > /tmp/xray.pid
@@ -51,9 +52,9 @@ start_xray() {
 
 # بررسی وجود باینری xray در PATH
 if ! command -v xray >/dev/null 2>&1; then
-    echo "[RVG] Warning: xray binary not found in PATH! Falling back to standalone FastAPI mode on port ${PORT:-8080}."
-    kill "$FASTAPI_PID" 2>/dev/null || true
-    exec uvicorn main:app --host 0.0.0.0 --port "${PORT:-8080}"
+    echo "[RVG] Notice: xray binary not found in PATH. Operating in pure Python Gateway mode on port ${PUBLIC_PORT}."
+    wait "$FASTAPI_PID"
+    exit 0
 fi
 
 # استارت اولیه Xray-core
