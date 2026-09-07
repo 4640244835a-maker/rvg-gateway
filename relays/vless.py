@@ -302,8 +302,8 @@ async def handle_vless_websocket(websocket: WebSocket, db: Session):
             upstream_reader, upstream_writer = await _connect_tcp_upstream(
                 target_host=target_host,
                 target_port=target_port,
-                dns_timeout=2.5,
-                connect_timeout=4.0
+                dns_timeout=5.0,
+                connect_timeout=8.0
             )
         except Exception as conn_err:
             logger.error(f"Failed to connect to upstream {target_host}:{target_port} -> {conn_err}")
@@ -403,9 +403,14 @@ async def _handle_vless_udp(
         async def _ws_to_udp():
             try:
                 while True:
-                    data = await websocket.receive_bytes()
-                    if not data:
+                    msg = await websocket.receive()
+                    if msg.get("type") == "websocket.disconnect":
                         break
+                    data = msg.get("bytes")
+                    if not data and msg.get("text"):
+                        data = msg["text"].encode("utf-8")
+                    if not data:
+                        continue
                     offset = 0
                     while offset + 2 <= len(data):
                         pkt_len = struct.unpack("!H", data[offset:offset+2])[0]
@@ -473,10 +478,15 @@ async def _relay_ws_to_tcp(
     total_bytes = 0
     try:
         while True:
-            data = await websocket.receive_bytes()
-            if not data:
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
                 logger.info(f"[WS->TCP] Clean EOF received from client WebSocket. user={user_id} total={total_bytes}B")
                 break
+            data = msg.get("bytes")
+            if not data and msg.get("text"):
+                data = msg["text"].encode("utf-8")
+            if not data:
+                continue
             chunk_len = len(data)
             total_bytes += chunk_len
             logger.info(f"[WS->TCP] user={user_id} chunk={chunk_len}B total={total_bytes}B")
