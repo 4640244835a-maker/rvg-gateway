@@ -32,6 +32,7 @@ DEFAULT_CONFIG_PATH = Path(os.getenv("XRAY_CONFIG_PATH", config.BASE_DIR / "conf
 XRAY_PID_FILE = Path(os.getenv("XRAY_PID_FILE", "/tmp/xray.pid"))
 SUPERVISOR_PID_FILE = Path(os.getenv("SUPERVISOR_PID_FILE", "/tmp/supervisor.pid"))
 XRAY_RELOAD_FLAG = Path(os.getenv("XRAY_RELOAD_FLAG", "/tmp/xray.reload"))
+XRAY_INTERNAL_PORT = int(os.getenv("XRAY_INTERNAL_PORT", "10080"))
 XRAY_API_PORT = int(os.getenv("XRAY_API_PORT", "10085"))
 FASTAPI_INTERNAL_PORT = int(os.getenv("FASTAPI_INTERNAL_PORT", "8000"))
 
@@ -95,17 +96,12 @@ def generate_xray_config_dict(db: Session) -> Dict[str, Any]:
         "inbounds": [
             {
                 "tag": "vless-in",
-                "listen": "0.0.0.0",
-                "port": public_port,
+                "listen": "127.0.0.1",
+                "port": XRAY_INTERNAL_PORT,
                 "protocol": "vless",
                 "settings": {
                     "clients": clients,
-                    "decryption": "none",
-                    "fallbacks": [
-                        {
-                            "dest": FASTAPI_INTERNAL_PORT
-                        }
-                    ]
+                    "decryption": "none"
                 },
                 "streamSettings": {
                     "network": "ws",
