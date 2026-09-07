@@ -107,7 +107,9 @@ def generate_xray_config_dict(db: Session) -> Dict[str, Any]:
                     "network": "ws",
                     "security": "none",
                     "wsSettings": {
-                        "path": ws_path
+                        "path": ws_path,
+                        "maxEarlyData": 2048,
+                        "earlyDataHeaderName": "Sec-WebSocket-Protocol"
                     }
                 }
             },
