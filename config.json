@@ -25,23 +25,20 @@
   "inbounds": [
     {
       "tag": "vless-in",
-      "listen": "0.0.0.0",
-      "port": 8080,
+      "listen": "127.0.0.1",
+      "port": 10080,
       "protocol": "vless",
       "settings": {
         "clients": [],
-        "decryption": "none",
-        "fallbacks": [
-          {
-            "dest": 8000
-          }
-        ]
+        "decryption": "none"
       },
       "streamSettings": {
         "network": "ws",
         "security": "none",
         "wsSettings": {
-          "path": "/vless"
+          "path": "/vless",
+          "maxEarlyData": 2048,
+          "earlyDataHeaderName": "Sec-WebSocket-Protocol"
         }
       }
     },
