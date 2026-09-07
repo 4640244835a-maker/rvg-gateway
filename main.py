@@ -51,6 +51,9 @@ async def lifespan(app: FastAPI):
     database.init_db()
     logger.info(f"Database initialized at: {config.DATABASE_URL}")
 
+    # راه‌اندازی تسک غیرمسدودکننده تخلیه دسته‌ای ترافیک به دیتابیس
+    traffic_worker_task = asyncio.create_task(database.start_traffic_flush_worker(interval=2.0))
+
     # راه‌اندازی سرور داخلی SOCKS5 در صورت فعال بودن
     global socks5_instance
     if config.ENABLE_SOCKS5:
@@ -63,8 +66,11 @@ async def lifespan(app: FastAPI):
 
     # فرآیند خروج و آزادسازی منابع
     logger.info("Shutting down RVG Gateway...")
+    traffic_worker_task.cancel()
+    database.flush_traffic_sync()
     if socks5_instance:
         await socks5_instance.stop()
+
 
 
 app = FastAPI(
