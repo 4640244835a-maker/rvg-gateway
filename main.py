@@ -31,6 +31,7 @@ import config
 import database
 from relays.vless import handle_vless_websocket, _resolve_host
 from relays.socks import Socks5Server
+from xray_manager import regenerate_config, reload_xray
 
 # پیکربندی سیستم لاگینگ
 logging.basicConfig(
@@ -50,6 +51,14 @@ async def lifespan(app: FastAPI):
     # مقداردهی اولیه پایگاه داده و ایجاد جداول
     database.init_db()
     logger.info(f"Database initialized at: {config.DATABASE_URL}")
+
+    # تولید اولیه فایل کانفیگ Xray-core بر اساس کاربران فعال پایگاه داده
+    try:
+        with database.SessionLocal() as startup_db:
+            regenerate_config(startup_db)
+        reload_xray()
+    except Exception as xray_err:
+        logger.warning(f"Initial Xray config generation deferred: {xray_err}")
 
     # راه‌اندازی تسک غیرمسدودکننده تخلیه دسته‌ای ترافیک به دیتابیس
     traffic_worker_task = asyncio.create_task(database.start_traffic_flush_worker(interval=2.0))
@@ -351,6 +360,13 @@ async def create_new_link(
     link = database.create_link(db, name=name, quota_bytes=quota_bytes, expire_at=expire_at)
     logger.info(f"Created new proxy link: '{link.name}' with UUID: {link.uuid}")
 
+    # همگام‌سازی بلادرنگ با کانفیگ Xray-core
+    try:
+        regenerate_config(db)
+        reload_xray()
+    except Exception as xray_sync_err:
+        logger.warning(f"Xray config reload failed during link creation: {xray_sync_err}")
+
     # در صورتی که درخواست از طریق فرم HTML ارسال شده باشد، به داشبورد برمی‌گردیم
     if "text/html" in request.headers.get("accept", ""):
         return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
@@ -370,6 +386,13 @@ async def toggle_link(
     if not updated:
         raise HTTPException(status_code=404, detail="Link not found")
 
+    # همگام‌سازی بلادرنگ با کانفیگ Xray-core
+    try:
+        regenerate_config(db)
+        reload_xray()
+    except Exception as xray_sync_err:
+        logger.warning(f"Xray config reload failed during link toggle: {xray_sync_err}")
+
     if "text/html" in request.headers.get("accept", ""):
         return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     return updated.to_dict()
@@ -388,6 +411,13 @@ async def reset_link(
     if not updated:
         raise HTTPException(status_code=404, detail="Link not found")
 
+    # همگام‌سازی بلادرنگ با کانفیگ Xray-core در صورت مجاز شدن مجدد کاربر
+    try:
+        regenerate_config(db)
+        reload_xray()
+    except Exception as xray_sync_err:
+        logger.warning(f"Xray config reload failed during link reset: {xray_sync_err}")
+
     if "text/html" in request.headers.get("accept", ""):
         return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     return updated.to_dict()
@@ -405,6 +435,13 @@ async def remove_link(
     success = database.delete_link(db, link_id)
     if not success:
         raise HTTPException(status_code=404, detail="Link not found")
+
+    # همگام‌سازی بلادرنگ با کانفیگ Xray-core
+    try:
+        regenerate_config(db)
+        reload_xray()
+    except Exception as xray_sync_err:
+        logger.warning(f"Xray config reload failed during link deletion: {xray_sync_err}")
 
     if "text/html" in request.headers.get("accept", ""):
         return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
