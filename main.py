@@ -29,9 +29,8 @@ from sqlalchemy.orm import Session
 
 import config
 import database
-from relays.vless import handle_vless_websocket, _resolve_host
 from relays.socks import Socks5Server
-from xray_manager import regenerate_config, reload_xray
+from xray_manager import regenerate_config, reload_xray, get_user_traffic_stats
 
 # پیکربندی سیستم لاگینگ
 logging.basicConfig(
@@ -277,38 +276,20 @@ async def dashboard_view(
 
 
 # ==========================================
-# مسیر رله VLESS مبتنی بر وب‌سوکت و پروب سلامت مسیر
+# پروب سلامت درگاه VLESS (مدیریت توسط هسته Xray-core)
 # ==========================================
 
 _configured_ws_path = config.WS_PATH if config.WS_PATH.startswith("/") else f"/{config.WS_PATH}"
-
-@app.websocket(_configured_ws_path)
-@app.websocket("/vless")
-@app.websocket("/vless/")
-@app.websocket("/ws")
-@app.websocket("/ws/")
-@app.websocket("/{full_path:path}")
-async def vless_websocket_endpoint(
-    websocket: WebSocket,
-    full_path: str = "",
-    db: Session = Depends(database.get_db)
-):
-    """
-    هندلر جامع VLESS over WebSocket
-    پشتیبانی از تمام مسیرهای دلخواه و جلوگیری از خطای ۴۰۴ در کلاینت‌های مختلف
-    """
-    await handle_vless_websocket(websocket, db)
-
 
 @app.api_route(_configured_ws_path, methods=["GET", "POST", "HEAD"])
 @app.api_route("/vless", methods=["GET", "POST", "HEAD"])
 @app.api_route("/vless/", methods=["GET", "POST", "HEAD"])
 async def vless_http_probe():
     """
-    پاسخ به پروب‌های HTTP/XHTTP کلاینت‌ها و بررسی آنلاین بودن مسیر رله VLESS در Railway
+    پاسخ به پروب‌های HTTP کلاینت‌ها و تایید آنلاین بودن درگاه VLESS (مدیریت‌شده با Xray-core)
     """
     return Response(
-        content="RVG Gateway VLESS Relay Endpoint Active (WebSocket/XHTTP Ready)\n",
+        content="RVG Gateway VLESS Active (Powered by official Xray-core Engine)\n",
         media_type="text/plain",
         status_code=status.HTTP_200_OK
     )
@@ -512,7 +493,11 @@ async def diagnostic_tcp_test():
     for domain in dns_targets:
         start = time.time()
         try:
-            resolved = await _resolve_host(domain, 443, timeout=3.0)
+            loop = asyncio.get_running_loop()
+            resolved = await asyncio.wait_for(
+                loop.getaddrinfo(domain, 443),
+                timeout=3.0
+            )
             elapsed = time.time() - start
             ips = list(dict.fromkeys([item[4][0] for item in resolved]))
             dns_results[domain] = {
