@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 import config
 import database
 from relays.socks import Socks5Server
-from xray_manager import regenerate_config, reload_xray, get_user_traffic_stats
+from xray_manager import regenerate_config, reload_xray, get_user_traffic_stats, get_xray_diagnostics
 
 # پیکربندی سیستم لاگینگ
 logging.basicConfig(
@@ -52,10 +52,11 @@ async def lifespan(app: FastAPI):
     logger.info(f"Database initialized at: {config.DATABASE_URL}")
 
     # تولید اولیه فایل کانفیگ Xray-core بر اساس کاربران فعال پایگاه داده
+    # توجه: هسته Xray در start.sh پس از این مرحله با کانفیگ تولیدشده استارت می‌خورد،
+    # بنابراین نیازی به فراخوانی reload_xray در زمان بوت اولیه نیست.
     try:
         with database.SessionLocal() as startup_db:
             regenerate_config(startup_db)
-        reload_xray()
     except Exception as xray_err:
         logger.warning(f"Initial Xray config generation deferred: {xray_err}")
 
@@ -453,6 +454,16 @@ async def health_check():
         "vless_active": True,
         "socks5_active": config.ENABLE_SOCKS5
     }
+
+
+@app.get("/api/diag/xray")
+async def diagnostic_xray(lines: int = 50):
+    """
+    نقطه پایانی تشخیصی هسته Xray-core:
+    بررسی زنده بودن پروسه، استخراج PID، میزان مصرف حافظه RAM و آخرین خطوط لاگ خروجی
+    """
+    tail = max(5, min(lines, 200))
+    return get_xray_diagnostics(tail_lines=tail)
 
 
 @app.get("/api/diag/tcp-test")
