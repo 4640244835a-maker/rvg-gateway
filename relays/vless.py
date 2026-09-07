@@ -469,24 +469,29 @@ async def _relay_ws_to_tcp(
     user_id: int,
     db: Optional[Session] = None
 ):
-    """انتقال بسته‌ها از کلاینت وبسوکت به سوکت مقصد به همراه محاسبه غیرمسدودکننده ترافیک در RAM"""
+    """انتقال بسته‌ها از کلاینت وبسوکت به سوکت مقصد به همراه محاسبه ترافیک و لاگ تشخیصی"""
+    total_bytes = 0
     try:
         while True:
             data = await websocket.receive_bytes()
             if not data:
+                logger.info(f"[WS->TCP] Clean EOF received from client WebSocket. user={user_id} total={total_bytes}B")
                 break
             chunk_len = len(data)
+            total_bytes += chunk_len
+            logger.info(f"[WS->TCP] user={user_id} chunk={chunk_len}B total={total_bytes}B")
+
             writer.write(data)
             await writer.drain()
 
-            has_quota = database.record_traffic(user_id, chunk_len)
+            has_quota = database.record_traffic(db, user_id, chunk_len)
             if not has_quota:
                 logger.warning(f"User {user_id} exceeded quota during upload. Terminating connection.")
                 break
-    except (WebSocketDisconnect, asyncio.CancelledError):
-        pass
+    except (WebSocketDisconnect, asyncio.CancelledError) as e:
+        logger.info(f"[WS->TCP] Closed ({type(e).__name__}). user={user_id} total={total_bytes}B")
     except Exception as e:
-        logger.debug(f"WS to TCP relay stopped: {e}")
+        logger.info(f"[WS->TCP] Exception {type(e).__name__}: {e} (user={user_id}, total={total_bytes}B)")
 
 
 async def _relay_tcp_to_ws(
@@ -495,21 +500,26 @@ async def _relay_tcp_to_ws(
     user_id: int,
     db: Optional[Session] = None
 ):
-    """انتقال بسته‌ها از سوکت مقصد به کلاینت وبسوکت به همراه محاسبه غیرمسدودکننده ترافیک در RAM"""
+    """انتقال بسته‌ها از سوکت مقصد به کلاینت وبسوکت به همراه محاسبه ترافیک و لاگ تشخیصی"""
+    total_bytes = 0
     try:
         while True:
             data = await reader.read(config.BUFFER_SIZE)
             if not data:
+                logger.info(f"[TCP->WS] Clean EOF received from upstream TCP socket. user={user_id} total={total_bytes}B")
                 break
             chunk_len = len(data)
+            total_bytes += chunk_len
+            logger.info(f"[TCP->WS] user={user_id} chunk={chunk_len}B total={total_bytes}B")
+
             await websocket.send_bytes(data)
 
-            has_quota = database.record_traffic(user_id, chunk_len)
+            has_quota = database.record_traffic(db, user_id, chunk_len)
             if not has_quota:
                 logger.warning(f"User {user_id} exceeded quota during download. Terminating connection.")
                 break
-    except (WebSocketDisconnect, asyncio.CancelledError):
-        pass
+    except (WebSocketDisconnect, asyncio.CancelledError) as e:
+        logger.info(f"[TCP->WS] Closed ({type(e).__name__}). user={user_id} total={total_bytes}B")
     except Exception as e:
-        logger.debug(f"TCP to WS relay stopped: {e}")
+        logger.info(f"[TCP->WS] Exception {type(e).__name__}: {e} (user={user_id}, total={total_bytes}B)")
 
