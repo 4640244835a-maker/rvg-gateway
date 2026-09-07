@@ -18,7 +18,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8080 \
-    FASTAPI_INTERNAL_PORT=8000 \
+    XRAY_INTERNAL_PORT=10080 \
     XRAY_API_PORT=10085 \
     XRAY_CONFIG_PATH=/app/config.json
 
@@ -49,7 +49,7 @@ RUN mkdir -p /app/data /tmp && \
     chmod +x /app/start.sh /usr/local/bin/xray || true
 
 # Expose ports
-EXPOSE 8080 8000 1080
+EXPOSE 8080 10080 1080
 
 # Healthcheck for container orchestrators (Railway / Docker Swarm)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=8s --retries=3 \
