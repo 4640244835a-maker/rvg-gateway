@@ -6,6 +6,8 @@ RVG Gateway - Main Application Entrypoint
 
 import asyncio
 import logging
+import os
+import socket
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -30,6 +32,7 @@ from sqlalchemy.orm import Session
 import config
 import database
 from relays.socks import Socks5Server
+from relays.vless import handle_vless_websocket
 from xray_manager import regenerate_config, reload_xray, get_user_traffic_stats, get_xray_diagnostics
 
 # پیکربندی سیستم لاگینگ
@@ -277,10 +280,99 @@ async def dashboard_view(
 
 
 # ==========================================
-# پروب سلامت درگاه VLESS (مدیریت توسط هسته Xray-core)
+# درگاه ارتباطی VLESS over WebSocket (هدایت به Xray-core با پشتیبانی از فال‌بک)
 # ==========================================
 
 _configured_ws_path = config.WS_PATH if config.WS_PATH.startswith("/") else f"/{config.WS_PATH}"
+
+
+def _is_xray_core_ready(port: int = 10080) -> bool:
+    """بررسی سریع سوکت محلی جهت اطمینان از بالا بودن هسته Xray-core"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(0.2)
+    try:
+        return s.connect_ex(('127.0.0.1', port)) == 0
+    except Exception:
+        return False
+    finally:
+        s.close()
+
+
+async def _handle_vless_ws_stream(websocket: WebSocket, db: Session):
+    """
+    هدایت هوشمند ترافیک WebSocket کلاینت VLESS:
+    ۱. تلاش برای فوروارد مستقیم به هسته رسمی و پرسرعت Xray-core
+    ۲. در صورت خاموش بودن یا ری‌استارت Xray، اجرای شفاف رله داخلی پایتون
+    """
+    xray_port = int(os.getenv("XRAY_INTERNAL_PORT", "10080"))
+
+    if _is_xray_core_ready(xray_port):
+        try:
+            import websockets
+            sec_ws_proto = websocket.headers.get("sec-websocket-protocol")
+            subprotocols = [sec_ws_proto] if sec_ws_proto else None
+
+            # پذیرش اتصال وب‌سوکت با کلاینت
+            if sec_ws_proto:
+                await websocket.accept(subprotocol=sec_ws_proto)
+            else:
+                await websocket.accept()
+
+            xray_url = f"ws://127.0.0.1:{xray_port}{_configured_ws_path}"
+
+            async with websockets.connect(
+                xray_url,
+                subprotocols=subprotocols,
+                max_size=None,
+                ping_interval=None
+            ) as xray_ws:
+                async def client_to_xray():
+                    try:
+                        while True:
+                            data = await websocket.receive()
+                            if "bytes" in data and data["bytes"]:
+                                await xray_ws.send(data["bytes"])
+                            elif "text" in data and data["text"]:
+                                await xray_ws.send(data["text"])
+                            elif data.get("type") == "websocket.disconnect":
+                                break
+                    except Exception:
+                        pass
+
+                async def xray_to_client():
+                    try:
+                        async for msg in xray_ws:
+                            if isinstance(msg, bytes):
+                                await websocket.send_bytes(msg)
+                            elif isinstance(msg, str):
+                                await websocket.send_text(msg)
+                    except Exception:
+                        pass
+
+                await asyncio.gather(client_to_xray(), xray_to_client(), return_exceptions=True)
+                return
+        except Exception as proxy_err:
+            logger.debug(f"[VLESS Gateway] Direct Xray stream finished or interrupted: {proxy_err}")
+            return
+
+    # فال‌بک شفاف به رله پایتونی در صورتی که هسته Xray هنوز آماده نشده باشد
+    try:
+        await handle_vless_websocket(websocket, db)
+    except Exception as fallback_err:
+        logger.debug(f"[VLESS Gateway] Internal fallback finished: {fallback_err}")
+
+
+# ثبت مسیرهای وب‌سوکت برای مسیر سفارشی و پیش‌فرض
+@app.websocket(_configured_ws_path)
+async def vless_ws_primary(websocket: WebSocket, db: Session = Depends(database.get_db)):
+    await _handle_vless_ws_stream(websocket, db)
+
+
+if _configured_ws_path not in ("/vless", "/vless/"):
+    @app.websocket("/vless")
+    async def vless_ws_fallback(websocket: WebSocket, db: Session = Depends(database.get_db)):
+        await _handle_vless_ws_stream(websocket, db)
+
 
 @app.api_route(_configured_ws_path, methods=["GET", "POST", "HEAD"])
 @app.api_route("/vless", methods=["GET", "POST", "HEAD"])
