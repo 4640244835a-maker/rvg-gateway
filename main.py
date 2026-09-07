@@ -6,6 +6,7 @@ RVG Gateway - Main Application Entrypoint
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,7 +29,7 @@ from sqlalchemy.orm import Session
 
 import config
 import database
-from relays.vless import handle_vless_websocket
+from relays.vless import handle_vless_websocket, _resolve_host
 from relays.socks import Socks5Server
 
 # پیکربندی سیستم لاگینگ
@@ -427,6 +428,66 @@ async def health_check():
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "vless_active": True,
         "socks5_active": config.ENABLE_SOCKS5
+    }
+
+
+@app.get("/api/diag/tcp-test")
+async def diagnostic_tcp_test():
+    """
+    نقطه پایانی تشخیصی بدون احراز هویت جهت اعتبارسنجی شبکه خروجی کانتینر
+    تست مستقیم TCP و تست رزولوشن DNS با تابع _resolve_host پروتکل VLESS
+    """
+    tcp_results = {}
+    tcp_targets = [("8.8.8.8", 443), ("google.com", 443), ("1.1.1.1", 443)]
+    for host, port in tcp_targets:
+        start = time.time()
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port),
+                timeout=5.0
+            )
+            elapsed = time.time() - start
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            tcp_results[f"{host}:{port}"] = {
+                "status": "success",
+                "time_sec": round(elapsed, 2)
+            }
+        except Exception as e:
+            elapsed = time.time() - start
+            tcp_results[f"{host}:{port}"] = {
+                "status": "failed",
+                "error": str(e),
+                "time_sec": round(elapsed, 2)
+            }
+
+    dns_results = {}
+    dns_targets = ["google.com", "cloudflare.com", "dns.google"]
+    for domain in dns_targets:
+        start = time.time()
+        try:
+            resolved = await _resolve_host(domain, 443, timeout=3.0)
+            elapsed = time.time() - start
+            ips = list(dict.fromkeys([item[4][0] for item in resolved]))
+            dns_results[domain] = {
+                "status": "success",
+                "time_sec": round(elapsed, 2),
+                "resolved_ips": ips
+            }
+        except Exception as e:
+            elapsed = time.time() - start
+            dns_results[domain] = {
+                "status": "failed",
+                "error": str(e),
+                "time_sec": round(elapsed, 2)
+            }
+
+    return {
+        "tcp_connect_tests": tcp_results,
+        "dns_resolve_tests": dns_results
     }
 
 
