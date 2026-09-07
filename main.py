@@ -301,65 +301,88 @@ def _is_xray_core_ready(port: int = 10080) -> bool:
 async def _handle_vless_ws_stream(websocket: WebSocket, db: Session):
     """
     هدایت هوشمند ترافیک WebSocket کلاینت VLESS:
-    ۱. تلاش برای فوروارد مستقیم به هسته رسمی و پرسرعت Xray-core
-    ۲. در صورت خاموش بودن یا ری‌استارت Xray، اجرای شفاف رله داخلی پایتون
+    ۱. در صورت در دسترس بودن هسته رسمی Xray-core، برقراری اتصال به آن و استریم مستقیم
+    ۲. در صورت خاموش بودن، خطا یا عدم نصب websockets، اجرای فوری و شفاف رله داخلی پایتون
     """
     xray_port = int(os.getenv("XRAY_INTERNAL_PORT", "10080"))
+
+    # استخراج ساب‌پروتکل درخواستی کلاینت (حاوی اطلاعات Early Data)
+    sec_ws_proto = websocket.headers.get("sec-websocket-protocol", "")
+    chosen_subproto = sec_ws_proto.split(",")[0].strip() if sec_ws_proto else None
+
+    xray_success = False
 
     if _is_xray_core_ready(xray_port):
         try:
             import websockets
-            sec_ws_proto = websocket.headers.get("sec-websocket-protocol")
-            subprotocols = [sec_ws_proto] if sec_ws_proto else None
+            xray_url = f"ws://127.0.0.1:{xray_port}{_configured_ws_path}"
+            subprotocols = [chosen_subproto] if chosen_subproto else None
 
-            # پذیرش اتصال وب‌سوکت با کلاینت
-            if sec_ws_proto:
-                await websocket.accept(subprotocol=sec_ws_proto)
+            # اتصال به پورت محلی Xray قبل از accept کردن کلاینت
+            xray_ws = await asyncio.wait_for(
+                websockets.connect(
+                    xray_url,
+                    subprotocols=subprotocols,
+                    max_size=None,
+                    ping_interval=None
+                ),
+                timeout=2.0
+            )
+
+            # با موفقیت متصل شدیم؛ اکنون کلاینت وب‌سوکت را accept می‌کنیم
+            if chosen_subproto:
+                await websocket.accept(subprotocol=chosen_subproto)
             else:
                 await websocket.accept()
 
-            xray_url = f"ws://127.0.0.1:{xray_port}{_configured_ws_path}"
+            xray_success = True
 
-            async with websockets.connect(
-                xray_url,
-                subprotocols=subprotocols,
-                max_size=None,
-                ping_interval=None
-            ) as xray_ws:
-                async def client_to_xray():
+            async def client_to_xray():
+                try:
+                    while True:
+                        msg = await websocket.receive()
+                        if msg.get("type") == "websocket.disconnect":
+                            break
+                        b_data = msg.get("bytes")
+                        if b_data:
+                            await xray_ws.send(b_data)
+                        elif msg.get("text"):
+                            await xray_ws.send(msg["text"].encode("utf-8"))
+                except Exception:
+                    pass
+                finally:
                     try:
-                        while True:
-                            data = await websocket.receive()
-                            if "bytes" in data and data["bytes"]:
-                                await xray_ws.send(data["bytes"])
-                            elif "text" in data and data["text"]:
-                                await xray_ws.send(data["text"])
-                            elif data.get("type") == "websocket.disconnect":
-                                break
+                        await xray_ws.close()
                     except Exception:
                         pass
 
-                async def xray_to_client():
+            async def xray_to_client():
+                try:
+                    async for msg in xray_ws:
+                        if isinstance(msg, bytes):
+                            await websocket.send_bytes(msg)
+                        elif isinstance(msg, str):
+                            await websocket.send_text(msg)
+                except Exception:
+                    pass
+                finally:
                     try:
-                        async for msg in xray_ws:
-                            if isinstance(msg, bytes):
-                                await websocket.send_bytes(msg)
-                            elif isinstance(msg, str):
-                                await websocket.send_text(msg)
+                        await websocket.close()
                     except Exception:
                         pass
 
-                await asyncio.gather(client_to_xray(), xray_to_client(), return_exceptions=True)
-                return
-        except Exception as proxy_err:
-            logger.debug(f"[VLESS Gateway] Direct Xray stream finished or interrupted: {proxy_err}")
+            await asyncio.gather(client_to_xray(), xray_to_client(), return_exceptions=True)
             return
 
-    # فال‌بک شفاف به رله پایتونی در صورتی که هسته Xray هنوز آماده نشده باشد
-    try:
-        await handle_vless_websocket(websocket, db)
-    except Exception as fallback_err:
-        logger.debug(f"[VLESS Gateway] Internal fallback finished: {fallback_err}")
+        except Exception as proxy_err:
+            logger.info(f"[VLESS Gateway] Direct Xray-core bridge skipped/failed ({proxy_err}), switching to Python engine.")
+
+    # اگر به هر دلیلی هسته Xray متصل نشد، رله داخلی پایتون اتصال را از ابتدا هندل می‌کند
+    if not xray_success:
+        try:
+            await handle_vless_websocket(websocket, db)
+        except Exception as fallback_err:
+            logger.error(f"[VLESS Gateway] Python relay error: {fallback_err}")
 
 
 # ثبت مسیرهای وب‌سوکت برای مسیر سفارشی و پیش‌فرض
@@ -400,8 +423,15 @@ async def list_links(request: Request, db: Session = Depends(database.get_db)):
     raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
     client_domain = raw_host.split(":")[0].strip() if raw_host else ""
     active_domain = client_domain if (client_domain and client_domain not in ("localhost", "127.0.0.1", "0.0.0.0")) else config.PUBLIC_DOMAIN
-    active_port = 443 if ("railway.app" in active_domain) else config.PUBLIC_PORT
-    active_tls = True if (active_port == 443 or "railway.app" in active_domain) else config.PUBLIC_TLS
+    proto = request.headers.get("x-forwarded-proto", "https")
+    is_cloud_or_tls = (
+        proto == "https"
+        or "run.app" in active_domain
+        or "railway.app" in active_domain
+        or (active_domain not in ("localhost", "127.0.0.1", "0.0.0.0") and "." in active_domain)
+    )
+    active_port = 443 if is_cloud_or_tls else config.PUBLIC_PORT
+    active_tls = True if is_cloud_or_tls else config.PUBLIC_TLS
     links = database.get_all_links(db)
     return [l.to_dict(domain=active_domain, port=active_port, tls=active_tls) for l in links]
 
